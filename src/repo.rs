@@ -9,8 +9,8 @@ use serde_json::{Value, json};
 use crate::db::{now_string, open_connection, owner_id, resolve_db_path, with_write};
 use crate::domain::{
     CommandRecord, EventRecord, InternalCommandRecord, ItemListFilter, ProjectRecord, ProjectRow,
-    TreeNode, WorkItemRecord, WorkItemRow, bool_to_i64, parse_json, work_item_event_key,
-    work_item_from_value,
+    TreeNode, WorkItemRecord, WorkItemRow, bool_to_i64, parse_json, project_from_value,
+    work_item_event_key, work_item_from_value,
 };
 use crate::error::{CliError, CliResult, validation};
 use crate::git::find_repo_root;
@@ -780,7 +780,20 @@ pub fn undo_command(tx: &Transaction<'_>, command_id: &str) -> CliResult<Value> 
                 )?;
             }
             "project" => {
-                return validation("undo for project creation is not supported in the MVP");
+                if operation == "create" {
+                    return validation("undo for project creation is not supported in the MVP");
+                }
+                apply_project_undo(tx, &entity_key, before_state.as_deref())?;
+                insert_event(
+                    tx,
+                    undo.id,
+                    original.project_id,
+                    "project",
+                    &entity_key,
+                    &format!("undo_{operation}"),
+                    after_state.as_deref().and_then(parse_json),
+                    before_state.as_deref().and_then(parse_json),
+                )?;
             }
             _ => return validation(&format!("unsupported undo entity type: {entity_type}")),
         }
@@ -798,6 +811,22 @@ fn find_project_by_repo_root(conn: &Connection, repo_root: &str) -> Result<Optio
     )
     .optional()
     .map_err(Into::into)
+}
+
+fn apply_project_undo(
+    tx: &Transaction<'_>,
+    project_id: &str,
+    before_state: Option<&str>,
+) -> CliResult<()> {
+    let before = before_state
+        .and_then(parse_json)
+        .ok_or_else(|| CliError::Operational(anyhow::anyhow!("missing project state for undo")))?;
+    let project = project_from_value(&before).map_err(CliError::Operational)?;
+    tx.execute(
+        "UPDATE projects SET name = ?1, repo_root = ?2, item_prefix = ?3, updated_at = ?4, version = ?5 WHERE public_id = ?6",
+        params![project.name, project.repo_root, project.item_prefix, project.updated_at, project.version, project_id],
+    )?;
+    Ok(())
 }
 
 fn find_project_by_repo_root_tx(

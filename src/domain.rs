@@ -196,6 +196,10 @@ pub fn work_item_from_value(value: &Value) -> anyhow::Result<WorkItemRecord> {
     serde_json::from_value(value.clone()).map_err(Into::into)
 }
 
+pub fn project_from_value(value: &Value) -> anyhow::Result<ProjectRecord> {
+    serde_json::from_value(value.clone()).map_err(Into::into)
+}
+
 pub fn join_ids(items: &[String]) -> String {
     if items.is_empty() {
         "-".to_string()

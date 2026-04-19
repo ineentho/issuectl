@@ -631,6 +631,10 @@ fn review_tree_command_surfaces_review_state_in_json_and_human_output() {
     assert_eq!(review_tree["tree"].as_array().unwrap().len(), 1);
     assert_eq!(review_tree["tree"][0]["item"]["public_id"], "WI-1");
     assert_eq!(review_tree["tree"][0]["review_state"], "WAIT");
+    assert_eq!(
+        review_tree["tree"][0]["review_reason"],
+        "waiting on 1 unready descendant(s)"
+    );
     assert_eq!(review_tree["tree"][0]["has_unready_descendants"], true);
     assert_eq!(
         review_tree["tree"][0]["children"][0]["item"]["public_id"],
@@ -640,11 +644,16 @@ fn review_tree_command_surfaces_review_state_in_json_and_human_output() {
         review_tree["tree"][0]["children"][0]["review_state"],
         "REVIEW"
     );
+    assert_eq!(
+        review_tree["tree"][0]["children"][0]["review_reason"],
+        "item is not ready"
+    );
 
     let review_human = success_output(repo.path(), &db_path, &["review", "tree"]);
     let stdout = stdout_string(&review_human);
     assert!(stdout.contains("WAIT WI-1 [todo ready=true]"));
     assert!(stdout.contains("REVIEW WI-2 [todo ready=false]"));
+    assert!(stdout.contains("reason=waiting on 1 unready descendant(s)"));
 }
 
 #[test]
@@ -799,6 +808,10 @@ fn next_respects_ready_blockers_terminal_states_and_open_children() {
         .map(|item| item["public_id"].as_str().unwrap())
         .collect();
     assert_eq!(ids, vec!["WI-2", "WI-4", "WI-5"]);
+    assert_eq!(
+        next["explanations"][0]["reason"],
+        "ready to start; blockers=0 open_children=0"
+    );
     assert!(!ids.contains(&"WI-1"));
     assert!(!ids.contains(&"WI-3"));
 
@@ -815,6 +828,30 @@ fn next_respects_ready_blockers_terminal_states_and_open_children() {
         .map(|item| item["public_id"].as_str().unwrap())
         .collect();
     assert!(ids_after_done.contains(&"WI-3"));
+}
+
+#[test]
+fn undo_reverts_project_prefix_updates() {
+    let (repo, db_path) = setup_repo();
+    json_output(repo.path(), &db_path, &["--json", "init"]);
+    json_output(
+        repo.path(),
+        &db_path,
+        &["--json", "project", "update", "PRJ-1", "--prefix", "app"],
+    );
+
+    let undone = json_output(repo.path(), &db_path, &["--json", "undo", "CMD-2"]);
+    assert_eq!(undone["reversed_command"], "CMD-2");
+
+    let project = json_output(repo.path(), &db_path, &["--json", "project", "show"]);
+    assert_eq!(project["project"]["item_prefix"], "WI");
+
+    let created = json_output(
+        repo.path(),
+        &db_path,
+        &["--json", "item", "create", "--title", "Task"],
+    );
+    assert_eq!(created["item"]["public_id"], "WI-1");
 }
 
 #[test]

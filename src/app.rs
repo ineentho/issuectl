@@ -39,12 +39,19 @@ pub struct App {
 struct ReviewTreeNode {
     item: WorkItemRecord,
     review_state: &'static str,
+    review_reason: String,
     needs_review: bool,
     has_pending_descendants: bool,
     has_unready_descendants: bool,
     pending_descendants: usize,
     unready_descendants: usize,
     children: Vec<ReviewTreeNode>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct NextItemExplanation {
+    item_id: String,
+    reason: String,
 }
 
 impl App {
@@ -623,12 +630,27 @@ impl App {
             }
             thread::sleep(Duration::from_millis(250));
         };
+        let explanations = items
+            .iter()
+            .map(|item| {
+                Ok(NextItemExplanation {
+                    item_id: item.public_id.clone(),
+                    reason: next_reason(&conn, project.id, item)?,
+                })
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
 
         if self.json_output {
-            emit_value(true, &json!({ "items": items }))
+            emit_value(
+                true,
+                &json!({ "items": items, "explanations": explanations }),
+            )
         } else {
-            for item in items {
-                println!("{}\t{}\t{}", item.public_id, item.priority, item.title);
+            for (item, explanation) in items.iter().zip(explanations.iter()) {
+                println!(
+                    "{}\t{}\t{}\t{}",
+                    item.public_id, item.priority, item.title, explanation.reason
+                );
             }
             Ok(())
         }
@@ -703,10 +725,20 @@ fn build_review_tree(node: TreeNode) -> ReviewTreeNode {
     } else {
         "CLEAR"
     };
+    let review_reason = if needs_review {
+        "item is not ready".to_string()
+    } else if has_unready_descendants {
+        format!("waiting on {unready_descendants} unready descendant(s)")
+    } else if has_pending_descendants {
+        format!("waiting on {pending_descendants} open descendant(s)")
+    } else {
+        "ready and descendants are closed or ready".to_string()
+    };
 
     ReviewTreeNode {
         item: node.item,
         review_state,
+        review_reason,
         needs_review,
         has_pending_descendants,
         has_unready_descendants,
@@ -736,9 +768,35 @@ fn render_review_tree(node: &ReviewTreeNode, depth: usize) {
         node.item.ready,
         node.pending_descendants,
         node.unready_descendants,
-        node.item.title
+        node.item.title,
     );
+    println!("{}  reason={}", indent, node.review_reason);
     for child in &node.children {
         render_review_tree(child, depth + 1);
     }
+}
+
+fn next_reason(
+    conn: &rusqlite::Connection,
+    project_id: i64,
+    item: &WorkItemRecord,
+) -> anyhow::Result<String> {
+    let blockers = crate::repo::list_blockers(conn, project_id, &item.public_id)?;
+    let row = crate::repo::get_item_by_public_id_readonly(conn, project_id, &item.public_id)?;
+    let open_children = crate::repo::list_children(conn, project_id, row.row_id)?
+        .into_iter()
+        .filter(|child| {
+            child.status != StatusArg::Done.to_string()
+                && child.status != StatusArg::Cancelled.to_string()
+        })
+        .count();
+    let activity = if item.status == StatusArg::InProgress.to_string() {
+        "already in progress"
+    } else {
+        "ready to start"
+    };
+    Ok(format!(
+        "{activity}; blockers={} open_children={open_children}",
+        blockers.len()
+    ))
 }

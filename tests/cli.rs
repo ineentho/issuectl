@@ -330,6 +330,40 @@ fn move_children_and_tree_commands_render_hierarchy() {
 }
 
 #[test]
+fn review_tree_command_surfaces_review_state_in_json_and_human_output() {
+    let (repo, db_path) = setup_repo();
+    json_output(repo.path(), &db_path, &["--json", "init"]);
+    create_item(repo.path(), &db_path, "Parent");
+    create_item(repo.path(), &db_path, "Child");
+
+    success_output(
+        repo.path(),
+        &db_path,
+        &["item", "move", "WI-2", "--parent", "WI-1"],
+    );
+    success_output(repo.path(), &db_path, &["item", "ready", "WI-1"]);
+
+    let review_tree = json_output(repo.path(), &db_path, &["--json", "review", "tree"]);
+    assert_eq!(review_tree["tree"].as_array().unwrap().len(), 1);
+    assert_eq!(review_tree["tree"][0]["item"]["public_id"], "WI-1");
+    assert_eq!(review_tree["tree"][0]["review_state"], "WAIT");
+    assert_eq!(review_tree["tree"][0]["has_unready_descendants"], true);
+    assert_eq!(
+        review_tree["tree"][0]["children"][0]["item"]["public_id"],
+        "WI-2"
+    );
+    assert_eq!(
+        review_tree["tree"][0]["children"][0]["review_state"],
+        "REVIEW"
+    );
+
+    let review_human = success_output(repo.path(), &db_path, &["review", "tree"]);
+    let stdout = stdout_string(&review_human);
+    assert!(stdout.contains("WAIT WI-1 [todo ready=true]"));
+    assert!(stdout.contains("REVIEW WI-2 [todo ready=false]"));
+}
+
+#[test]
 fn parent_validation_rejects_self_parent_cycles_and_conflicting_flags() {
     let (repo, db_path) = setup_repo();
     json_output(repo.path(), &db_path, &["--json", "init"]);

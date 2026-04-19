@@ -18,10 +18,22 @@ pub enum Commands {
     Init,
     Project(ProjectArgs),
     Item(ItemArgs),
+    Review(ReviewArgs),
     Next(NextArgs),
     History(HistoryArgs),
     Undo(UndoArgs),
     Ui,
+}
+
+#[derive(Args, Debug)]
+pub struct ReviewArgs {
+    #[command(subcommand)]
+    pub command: ReviewCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ReviewCommand {
+    Tree { item_id: Option<String> },
 }
 
 #[derive(Args, Debug)]

@@ -1,11 +1,13 @@
 use std::thread;
 use std::time::Duration;
 
+use serde::Serialize;
 use serde_json::json;
 
 use crate::cli::{
     Commands, HistoryArgs, HistoryCommand, ItemArgs, ItemCommand, ItemCreateArgs, ItemListArgs,
-    ItemMoveArgs, ItemUpdateArgs, NextArgs, ProjectArgs, ProjectCommand, UndoArgs,
+    ItemMoveArgs, ItemUpdateArgs, NextArgs, ProjectArgs, ProjectCommand, ReviewArgs, ReviewCommand,
+    UndoArgs,
 };
 use crate::db::{
     initialize_database, now_string, open_connection, owner_id, resolve_db_path, with_write,
@@ -32,6 +34,18 @@ pub struct App {
     json_output: bool,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct ReviewTreeNode {
+    item: WorkItemRecord,
+    review_state: &'static str,
+    needs_review: bool,
+    has_pending_descendants: bool,
+    has_unready_descendants: bool,
+    pending_descendants: usize,
+    unready_descendants: usize,
+    children: Vec<ReviewTreeNode>,
+}
+
 impl App {
     pub fn new(json_output: bool) -> CliResult<Self> {
         let db_path = resolve_db_path()?;
@@ -47,6 +61,7 @@ impl App {
             Commands::Init => self.init_project(),
             Commands::Project(ProjectArgs { command }) => self.project_command(command),
             Commands::Item(ItemArgs { command }) => self.item_command(command),
+            Commands::Review(ReviewArgs { command }) => self.review_command(command),
             Commands::Next(args) => self.next(args),
             Commands::History(HistoryArgs { command }) => self.history_command(command),
             Commands::Undo(args) => self.undo(args),
@@ -126,6 +141,12 @@ impl App {
             ItemCommand::Move(args) => self.item_move(args),
             ItemCommand::Children { item_id } => self.item_children(&item_id),
             ItemCommand::Tree { item_id } => self.item_tree(item_id.as_deref()),
+        }
+    }
+
+    fn review_command(&self, command: ReviewCommand) -> CliResult<()> {
+        match command {
+            ReviewCommand::Tree { item_id } => self.review_tree(item_id.as_deref()),
         }
     }
 
@@ -511,6 +532,33 @@ impl App {
         }
     }
 
+    fn review_tree(&self, item_id: Option<&str>) -> CliResult<()> {
+        let conn = open_connection(&self.db_path)?;
+        let project = resolve_active_project_readonly(&conn, true, self.json_output)?;
+        let roots = if let Some(item_id) = item_id {
+            vec![get_item_by_public_id_readonly(&conn, project.id, item_id)?.record]
+        } else {
+            list_root_items(&conn, project.id)?
+        };
+        let mut tree = roots
+            .into_iter()
+            .map(|item| build_tree(&conn, project.id, item))
+            .collect::<anyhow::Result<Vec<TreeNode>>>()?
+            .into_iter()
+            .map(build_review_tree)
+            .collect::<Vec<_>>();
+        tree.sort_by(|left, right| review_sort_key(right).cmp(&review_sort_key(left)));
+
+        if self.json_output {
+            emit_value(true, &json!({ "tree": tree }))
+        } else {
+            for node in &tree {
+                render_review_tree(node, 0);
+            }
+            Ok(())
+        }
+    }
+
     fn next(&self, args: NextArgs) -> CliResult<()> {
         let conn = open_connection(&self.db_path)?;
         let project = resolve_active_project_readonly(&conn, true, self.json_output)?;
@@ -572,5 +620,78 @@ impl App {
         let owner = owner_id();
         let output = with_write(&mut conn, &owner, |tx| undo_command(tx, &args.command_id))?;
         emit_value(self.json_output, &output)
+    }
+}
+
+fn build_review_tree(node: TreeNode) -> ReviewTreeNode {
+    let mut children = node
+        .children
+        .into_iter()
+        .map(build_review_tree)
+        .collect::<Vec<_>>();
+    children.sort_by(|left, right| review_sort_key(right).cmp(&review_sort_key(left)));
+
+    let pending_descendants = children
+        .iter()
+        .map(|child| {
+            usize::from(
+                child.item.status != StatusArg::Done.to_string()
+                    && child.item.status != StatusArg::Cancelled.to_string(),
+            ) + child.pending_descendants
+        })
+        .sum();
+    let unready_descendants = children
+        .iter()
+        .map(|child| usize::from(!child.item.ready) + child.unready_descendants)
+        .sum();
+    let has_pending_descendants = pending_descendants > 0;
+    let has_unready_descendants = unready_descendants > 0;
+    let needs_review = !node.item.ready;
+    let review_state = if needs_review {
+        "REVIEW"
+    } else if has_unready_descendants {
+        "WAIT"
+    } else if has_pending_descendants {
+        "OPEN"
+    } else {
+        "CLEAR"
+    };
+
+    ReviewTreeNode {
+        item: node.item,
+        review_state,
+        needs_review,
+        has_pending_descendants,
+        has_unready_descendants,
+        pending_descendants,
+        unready_descendants,
+        children,
+    }
+}
+
+fn review_sort_key(node: &ReviewTreeNode) -> (bool, bool, bool, &str) {
+    (
+        node.needs_review,
+        node.has_unready_descendants,
+        node.has_pending_descendants,
+        node.item.public_id.as_str(),
+    )
+}
+
+fn render_review_tree(node: &ReviewTreeNode, depth: usize) {
+    let indent = "  ".repeat(depth);
+    println!(
+        "{}{} {} [{} ready={}] pending={} unready={} {}",
+        indent,
+        node.review_state,
+        node.item.public_id,
+        node.item.status,
+        node.item.ready,
+        node.pending_descendants,
+        node.unready_descendants,
+        node.item.title
+    );
+    for child in &node.children {
+        render_review_tree(child, depth + 1);
     }
 }

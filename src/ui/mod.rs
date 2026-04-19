@@ -69,9 +69,12 @@ struct IssueUi {
     subscriptions: Vec<Subscription>,
     create_priority: PriorityArg,
     edit_priority: PriorityArg,
+    item_status_filter: Option<StatusArg>,
+    item_ready_filter: Option<bool>,
     create_title: Entity<TextInput>,
     create_description: Entity<TextInput>,
     create_parent: Entity<TextInput>,
+    item_search: Entity<TextInput>,
     edit_title: Entity<TextInput>,
     edit_description: Entity<TextInput>,
     move_parent: Entity<TextInput>,
@@ -86,6 +89,7 @@ impl IssueUi {
         let create_title = cx.new(|cx| TextInput::new(cx, "New item title"));
         let create_description = cx.new(|cx| TextInput::new(cx, "Description"));
         let create_parent = cx.new(|cx| TextInput::new(cx, "Parent WI id (optional)"));
+        let item_search = cx.new(|cx| TextInput::new(cx, "Filter items by id or title"));
         let edit_title = cx.new(|cx| TextInput::new(cx, "Selected item title"));
         let edit_description = cx.new(|cx| TextInput::new(cx, "Selected item description"));
         let move_parent = cx.new(|cx| TextInput::new(cx, "New parent WI id, blank for root"));
@@ -104,9 +108,12 @@ impl IssueUi {
             subscriptions: Vec::new(),
             create_priority: PriorityArg::Medium,
             edit_priority: PriorityArg::Medium,
+            item_status_filter: None,
+            item_ready_filter: None,
             create_title,
             create_description,
             create_parent,
+            item_search,
             edit_title,
             edit_description,
             move_parent,
@@ -275,6 +282,16 @@ impl IssueUi {
 
     fn set_edit_priority_click(&mut self, priority: PriorityArg, cx: &mut Context<Self>) {
         self.edit_priority = priority;
+        cx.notify();
+    }
+
+    fn set_status_filter_click(&mut self, status: Option<StatusArg>, cx: &mut Context<Self>) {
+        self.item_status_filter = status;
+        cx.notify();
+    }
+
+    fn set_ready_filter_click(&mut self, ready: Option<bool>, cx: &mut Context<Self>) {
+        self.item_ready_filter = ready;
         cx.notify();
     }
 
@@ -731,6 +748,39 @@ impl Render for IssueUi {
         let create_parent_candidates = self.create_parent_candidates();
         let move_parent_candidates = self.move_parent_candidates();
         let blocker_candidates = self.blocker_candidates();
+        let item_search = Self::read_input(&self.item_search, cx);
+        let filtered_items = items
+            .into_iter()
+            .filter(|item| {
+                item_matches_filters(
+                    item,
+                    item_search.as_str(),
+                    self.item_status_filter,
+                    self.item_ready_filter,
+                )
+            })
+            .collect::<Vec<_>>();
+        let filtered_tree = filter_tree_nodes(
+            &tree,
+            item_search.as_str(),
+            self.item_status_filter,
+            self.item_ready_filter,
+        );
+        let filtered_next_items = next_items
+            .into_iter()
+            .filter(|item| {
+                item_matches_filters(
+                    item,
+                    item_search.as_str(),
+                    self.item_status_filter,
+                    self.item_ready_filter,
+                )
+            })
+            .collect::<Vec<_>>();
+        let selected_item_label = self
+            .selected_item_id
+            .clone()
+            .unwrap_or_else(|| "None".to_string());
 
         let mut root = div()
             .track_focus(&self.focus_handle(cx))
@@ -798,8 +848,8 @@ impl Render for IssueUi {
 
         root = root.child(div().flex().gap_3().children([
             metric_card("Projects", projects.len()).into_any_element(),
-            metric_card("Items", items.len()).into_any_element(),
-            metric_card("Actionable", next_items.len()).into_any_element(),
+            metric_card("Items", filtered_items.len()).into_any_element(),
+            metric_card("Actionable", filtered_next_items.len()).into_any_element(),
             metric_card("Recent Commands", commands.len()).into_any_element(),
         ]));
 
@@ -921,19 +971,19 @@ impl Render for IssueUi {
                                         .flex()
                                         .flex_col()
                                         .gap_2()
-                                        .children(next_items.into_iter().enumerate().map(|(ix, item)| {
+                                        .children(filtered_next_items.into_iter().enumerate().map(|(ix, item)| {
                                             let item_id = item.public_id.clone();
-                                            div()
+                                            let selected = self.selected_item_id.as_deref() == Some(item_id.as_str());
+                                            let mut row = div()
                                                 .id(("next-item", ix))
                                                 .p_2()
-                                                .bg(rgb(0xffffff))
                                                 .rounded_sm()
                                                 .border_1()
                                                 .border_color(rgb(0xd9dde7))
                                                 .cursor_pointer()
-                                                .child(format!("{} [{}] {}", item.public_id, item.priority, item.title))
-                                                .on_click(cx.listener(move |this, _, _, cx| this.choose_item(item_id.clone(), cx)))
-                                                .into_any_element()
+                                                .child(format!("{} [{}] {}", item.public_id, item.priority, item.title));
+                                            row = if selected { row.bg(rgb(0xdfe7ff)) } else { row.bg(rgb(0xffffff)) };
+                                            row.on_click(cx.listener(move |this, _, _, cx| this.choose_item(item_id.clone(), cx))).into_any_element()
                                         })),
                                 ),
                         ),
@@ -947,8 +997,35 @@ impl Render for IssueUi {
                         .gap_3()
                         .overflow_y_scroll()
                         .child(
+                            panel("Browse Items")
+                                .child(field_line("Selected item", selected_item_label))
+                                .child(self.item_search.clone())
+                                .child(section_label("Status"))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .gap_2()
+                                        .flex_wrap()
+                                        .child(button("filter-status-all", "All", self.item_status_filter.is_none()).on_click(cx.listener(|this, _, _, cx| this.set_status_filter_click(None, cx))))
+                                        .child(button("filter-status-todo", "Todo", self.item_status_filter == Some(StatusArg::Todo)).on_click(cx.listener(|this, _, _, cx| this.set_status_filter_click(Some(StatusArg::Todo), cx))))
+                                        .child(button("filter-status-progress", "In Progress", self.item_status_filter == Some(StatusArg::InProgress)).on_click(cx.listener(|this, _, _, cx| this.set_status_filter_click(Some(StatusArg::InProgress), cx))))
+                                        .child(button("filter-status-done", "Done", self.item_status_filter == Some(StatusArg::Done)).on_click(cx.listener(|this, _, _, cx| this.set_status_filter_click(Some(StatusArg::Done), cx))))
+                                        .child(button("filter-status-cancelled", "Cancelled", self.item_status_filter == Some(StatusArg::Cancelled)).on_click(cx.listener(|this, _, _, cx| this.set_status_filter_click(Some(StatusArg::Cancelled), cx)))),
+                                )
+                                .child(section_label("Ready"))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .gap_2()
+                                        .flex_wrap()
+                                        .child(button("filter-ready-all", "All", self.item_ready_filter.is_none()).on_click(cx.listener(|this, _, _, cx| this.set_ready_filter_click(None, cx))))
+                                        .child(button("filter-ready-true", "Ready", self.item_ready_filter == Some(true)).on_click(cx.listener(|this, _, _, cx| this.set_ready_filter_click(Some(true), cx))))
+                                        .child(button("filter-ready-false", "Not Ready", self.item_ready_filter == Some(false)).on_click(cx.listener(|this, _, _, cx| this.set_ready_filter_click(Some(false), cx)))),
+                                ),
+                        )
+                        .child(
                             panel("Hierarchy")
-                                .child(render_tree_list(&tree, self.selected_item_id.as_deref(), cx)),
+                                .child(render_tree_list(&filtered_tree, self.selected_item_id.as_deref(), cx)),
                         )
                         .child(
                             panel("All Items")
@@ -957,7 +1034,7 @@ impl Render for IssueUi {
                                         .flex()
                                         .flex_col()
                                         .gap_2()
-                                        .children(items.into_iter().enumerate().map(|(ix, item)| {
+                                        .children(filtered_items.into_iter().enumerate().map(|(ix, item)| {
                                             let item_id = item.public_id.clone();
                                             let selected = self.selected_item_id.as_deref() == Some(item_id.as_str());
                                             let mut row = div()
@@ -1052,7 +1129,7 @@ impl Render for IssueUi {
                                 .when(item_detail.is_none(), |container| container.child(div().text_sm().text_color(rgb(0x586172)).child("Select an item to inspect and edit."))),
                         )
                         .child(
-                            panel("History")
+                            panel("Project Command History")
                                 .child(
                                     div()
                                         .flex()
@@ -1076,7 +1153,8 @@ impl Render for IssueUi {
                                 .child(button("undo-button", "Undo Selected", false).on_click(cx.listener(Self::undo_selected_click)))
                                 .when(command_detail.is_some(), |container| {
                                     let (command, events) = command_detail.clone().expect("command detail");
-                                    container.child(div().text_sm().child(format!("{} {}", command.public_id, command.action)))
+                                    container.child(section_label("Selected command"))
+                                        .child(div().text_sm().child(format!("{} {}", command.public_id, command.action)))
                                         .child(
                                             div()
                                                 .flex()
@@ -1222,6 +1300,57 @@ fn collect_tree_ids(tree: &[TreeNode], blocked: &mut HashSet<String>) {
     for node in tree {
         blocked.insert(node.item.public_id.clone());
         collect_tree_ids(&node.children, blocked);
+    }
+}
+
+fn item_matches_filters(
+    item: &crate::domain::WorkItemRecord,
+    search: &str,
+    status_filter: Option<StatusArg>,
+    ready_filter: Option<bool>,
+) -> bool {
+    let matches_search = if search.trim().is_empty() {
+        true
+    } else {
+        let needle = search.trim().to_ascii_lowercase();
+        item.public_id.to_ascii_lowercase().contains(&needle)
+            || item.title.to_ascii_lowercase().contains(&needle)
+    };
+    let matches_status = status_filter
+        .map(|status| item.status == status.to_string())
+        .unwrap_or(true);
+    let matches_ready = ready_filter
+        .map(|ready| item.ready == ready)
+        .unwrap_or(true);
+    matches_search && matches_status && matches_ready
+}
+
+fn filter_tree_nodes(
+    tree: &[TreeNode],
+    search: &str,
+    status_filter: Option<StatusArg>,
+    ready_filter: Option<bool>,
+) -> Vec<TreeNode> {
+    tree.iter()
+        .filter_map(|node| filter_tree_node(node, search, status_filter, ready_filter))
+        .collect()
+}
+
+fn filter_tree_node(
+    node: &TreeNode,
+    search: &str,
+    status_filter: Option<StatusArg>,
+    ready_filter: Option<bool>,
+) -> Option<TreeNode> {
+    let children = filter_tree_nodes(&node.children, search, status_filter, ready_filter);
+    if item_matches_filters(&node.item, search, status_filter, ready_filter) || !children.is_empty()
+    {
+        Some(TreeNode {
+            item: node.item.clone(),
+            children,
+        })
+    } else {
+        None
     }
 }
 

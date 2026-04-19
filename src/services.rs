@@ -2,7 +2,9 @@ use anyhow::Result;
 use rusqlite::Connection;
 use serde_json::Value;
 
-use crate::db::{initialize_database, now_string, open_connection, owner_id, resolve_db_path, with_write};
+use crate::db::{
+    initialize_database, now_string, open_connection, owner_id, resolve_db_path, with_write,
+};
 use crate::domain::{
     CommandRecord, EventRecord, ItemListFilter, PriorityArg, ProjectRecord, StatusArg, TreeNode,
     WorkItemRecord, blocker_relation_event_key, bool_to_i64, work_item_event_key, work_item_state,
@@ -10,11 +12,12 @@ use crate::domain::{
 use crate::error::{CliError, CliResult};
 use crate::repo::{
     allocate_project_item_number, build_tree, create_command, ensure_no_block_cycle,
-    ensure_valid_parent, get_command_history, get_item_by_public_id, get_item_by_public_id_readonly,
-    get_or_create_project, insert_event, list_blocked_by, list_blockers, list_children,
-    list_commands, list_item_history, list_items, list_projects, list_root_items,
-    resolve_active_project_readonly, resolve_active_project_with_override, resolve_parent_row_id,
-    resolve_project_tx, select_next_items, set_project_override, undo_command,
+    ensure_valid_parent, get_command_history, get_item_by_public_id,
+    get_item_by_public_id_readonly, get_or_create_project, insert_event, list_blocked_by,
+    list_blockers, list_children, list_commands, list_item_history, list_items, list_projects,
+    list_root_items, resolve_active_project_readonly, resolve_active_project_with_override,
+    resolve_parent_row_id, resolve_project_tx, select_next_items, set_project_override,
+    undo_command,
 };
 
 #[derive(Debug, Clone)]
@@ -49,6 +52,7 @@ pub struct UpdateItemInput {
     pub item_id: String,
     pub title: String,
     pub description: String,
+    pub priority: PriorityArg,
 }
 
 #[derive(Debug, Clone)]
@@ -59,6 +63,10 @@ pub struct IssueService {
 impl IssueService {
     pub fn new() -> Result<Self> {
         let db_path = resolve_db_path()?;
+        Self::from_db_path(db_path)
+    }
+
+    fn from_db_path(db_path: std::path::PathBuf) -> Result<Self> {
         initialize_database(&db_path)?;
         Ok(Self { db_path })
     }
@@ -67,7 +75,9 @@ impl IssueService {
         let repo_root = crate::git::require_repo_root(false)?;
         let mut conn = open_connection(&self.db_path).map_err(CliError::Operational)?;
         let owner = owner_id();
-        with_write(&mut conn, &owner, |tx| get_or_create_project(tx, &repo_root, true))
+        with_write(&mut conn, &owner, |tx| {
+            get_or_create_project(tx, &repo_root, true)
+        })
     }
 
     pub fn load_overview(&self, selected_project_id: Option<&str>) -> CliResult<OverviewSnapshot> {
@@ -80,7 +90,8 @@ impl IssueService {
             let mut conn = self.open()?;
             match selected_project_id {
                 Some(project_id) => Some(
-                    resolve_active_project_with_override(&mut conn, Some(project_id), false)?.record,
+                    resolve_active_project_with_override(&mut conn, Some(project_id), false)?
+                        .record,
                 ),
                 None => match resolve_active_project_readonly(&conn, false, false) {
                     Ok(project) => Some(project.record),
@@ -97,14 +108,18 @@ impl IssueService {
                 Some(project.public_id.as_str()),
                 false,
             )?;
-            let items = list_items(&conn, project_row.id, &ItemListFilter {
-                status: None,
-                priority: None,
-                ready: None,
-                blocked: None,
-                parent: None,
-                root: false,
-            })
+            let items = list_items(
+                &conn,
+                project_row.id,
+                &ItemListFilter {
+                    status: None,
+                    priority: None,
+                    ready: None,
+                    blocked: None,
+                    parent: None,
+                    root: false,
+                },
+            )
             .map_err(CliError::Operational)?;
             let tree = list_root_items(&conn, project_row.id)
                 .map_err(CliError::Operational)?
@@ -112,7 +127,8 @@ impl IssueService {
                 .map(|item| build_tree(&conn, project_row.id, item))
                 .collect::<Result<Vec<_>>>()
                 .map_err(CliError::Operational)?;
-            let next_items = select_next_items(&conn, project_row.id, 8).map_err(CliError::Operational)?;
+            let next_items =
+                select_next_items(&conn, project_row.id, 8).map_err(CliError::Operational)?;
             let commands = list_commands(&conn, project_row.id).map_err(CliError::Operational)?;
             (items, tree, next_items, commands)
         } else {
@@ -133,10 +149,13 @@ impl IssueService {
         let mut conn = self.open()?;
         let project = resolve_active_project_with_override(&mut conn, Some(project_id), false)?;
         let item = get_item_by_public_id_readonly(&conn, project.id, item_id)?;
-        let children = list_children(&conn, project.id, item.row_id).map_err(CliError::Operational)?;
+        let children =
+            list_children(&conn, project.id, item.row_id).map_err(CliError::Operational)?;
         let blockers = list_blockers(&conn, project.id, item_id).map_err(CliError::Operational)?;
-        let blocked_by = list_blocked_by(&conn, project.id, item_id).map_err(CliError::Operational)?;
-        let history = list_item_history(&conn, project.id, item_id).map_err(CliError::Operational)?;
+        let blocked_by =
+            list_blocked_by(&conn, project.id, item_id).map_err(CliError::Operational)?;
+        let history =
+            list_item_history(&conn, project.id, item_id).map_err(CliError::Operational)?;
         Ok(ItemDetail {
             item: item.record,
             children,
@@ -146,7 +165,10 @@ impl IssueService {
         })
     }
 
-    pub fn command_history(&self, command_id: &str) -> CliResult<(CommandRecord, Vec<EventRecord>)> {
+    pub fn command_history(
+        &self,
+        command_id: &str,
+    ) -> CliResult<(CommandRecord, Vec<EventRecord>)> {
         let conn = self.open()?;
         get_command_history(&conn, command_id)
     }
@@ -169,7 +191,8 @@ impl IssueService {
                 }
                 _ => None,
             };
-            let number = allocate_project_item_number(tx, project.id).map_err(CliError::Operational)?;
+            let number =
+                allocate_project_item_number(tx, project.id).map_err(CliError::Operational)?;
             let public_id = format!("WI-{number}");
             let now = now_string();
             let parent_public_id = parent.as_ref().map(|item| item.record.public_id.clone());
@@ -195,7 +218,8 @@ impl IssueService {
             )
             .map_err(|err| CliError::Operational(err.into()))?;
             let persisted = get_item_by_public_id(tx, project.id, &public_id)?;
-            let command = create_command(tx, Some(project.id), "item.create", None).map_err(CliError::Operational)?;
+            let command = create_command(tx, Some(project.id), "item.create", None)
+                .map_err(CliError::Operational)?;
             insert_event(
                 tx,
                 command.id,
@@ -222,14 +246,16 @@ impl IssueService {
             let mut item = existing.record.clone();
             item.title = input.title.clone();
             item.description = input.description.clone();
+            item.priority = input.priority.to_string();
             item.updated_at = now_string();
             item.version += 1;
             tx.execute(
-                "UPDATE work_items SET title=?1, description=?2, updated_at=?3, version=?4 WHERE id=?5",
-                rusqlite::params![item.title, item.description, item.updated_at, item.version, existing.row_id],
+                "UPDATE work_items SET title=?1, description=?2, priority=?3, updated_at=?4, version=?5 WHERE id=?6",
+                rusqlite::params![item.title, item.description, item.priority, item.updated_at, item.version, existing.row_id],
             )
             .map_err(|err| CliError::Operational(err.into()))?;
-            let command = create_command(tx, Some(project.id), "item.update", None).map_err(CliError::Operational)?;
+            let command = create_command(tx, Some(project.id), "item.update", None)
+                .map_err(CliError::Operational)?;
             let persisted = get_item_by_public_id(tx, project.id, &input.item_id)?;
             insert_event(
                 tx,
@@ -255,7 +281,11 @@ impl IssueService {
             let before = work_item_state(&existing.record);
             let mut item = existing.record.clone();
             item.status = status.to_string();
-            item.closed_at = if status.is_terminal() { Some(now_string()) } else { None };
+            item.closed_at = if status.is_terminal() {
+                Some(now_string())
+            } else {
+                None
+            };
             item.updated_at = now_string();
             item.version += 1;
             tx.execute(
@@ -263,7 +293,8 @@ impl IssueService {
                 rusqlite::params![item.status, item.updated_at, item.closed_at, item.version, existing.row_id],
             )
             .map_err(|err| CliError::Operational(err.into()))?;
-            let command = create_command(tx, Some(project.id), "item.update", None).map_err(CliError::Operational)?;
+            let command = create_command(tx, Some(project.id), "item.update", None)
+                .map_err(CliError::Operational)?;
             let persisted = get_item_by_public_id(tx, project.id, item_id)?;
             insert_event(
                 tx,
@@ -293,10 +324,21 @@ impl IssueService {
             item.version += 1;
             tx.execute(
                 "UPDATE work_items SET ready=?1, updated_at=?2, version=?3 WHERE id=?4",
-                rusqlite::params![bool_to_i64(ready), item.updated_at, item.version, existing.row_id],
+                rusqlite::params![
+                    bool_to_i64(ready),
+                    item.updated_at,
+                    item.version,
+                    existing.row_id
+                ],
             )
             .map_err(|err| CliError::Operational(err.into()))?;
-            let command = create_command(tx, Some(project.id), if ready { "item.ready" } else { "item.unready" }, None).map_err(CliError::Operational)?;
+            let command = create_command(
+                tx,
+                Some(project.id),
+                if ready { "item.ready" } else { "item.unready" },
+                None,
+            )
+            .map_err(CliError::Operational)?;
             let persisted = get_item_by_public_id(tx, project.id, item_id)?;
             insert_event(
                 tx,
@@ -313,7 +355,12 @@ impl IssueService {
         })
     }
 
-    pub fn set_block_relation(&self, item_id: &str, blocker_id: &str, add: bool) -> CliResult<Value> {
+    pub fn set_block_relation(
+        &self,
+        item_id: &str,
+        blocker_id: &str,
+        add: bool,
+    ) -> CliResult<Value> {
         let mut conn = self.open()?;
         let owner = owner_id();
         with_write(&mut conn, &owner, |tx| {
@@ -340,8 +387,18 @@ impl IssueService {
                 )
                 .map_err(|err| CliError::Operational(err.into()))?;
             }
-            let command = create_command(tx, Some(project.id), if add { "item.block" } else { "item.unblock" }, None).map_err(CliError::Operational)?;
-            let relation_key = blocker_relation_event_key(project.id, &blocker.record.public_id, &blocked.record.public_id);
+            let command = create_command(
+                tx,
+                Some(project.id),
+                if add { "item.block" } else { "item.unblock" },
+                None,
+            )
+            .map_err(CliError::Operational)?;
+            let relation_key = blocker_relation_event_key(
+                project.id,
+                &blocker.record.public_id,
+                &blocked.record.public_id,
+            );
             let state = serde_json::json!({"blocker_id": blocker.record.public_id, "blocked_id": blocked.record.public_id});
             insert_event(
                 tx,
@@ -354,7 +411,9 @@ impl IssueService {
                 if add { Some(state.clone()) } else { None },
             )
             .map_err(CliError::Operational)?;
-            Ok(serde_json::json!({ "blocked": blocked.record, "blocker": blocker.record, "added": add }))
+            Ok(
+                serde_json::json!({ "blocked": blocked.record, "blocker": blocker.record, "added": add }),
+            )
         })
     }
 
@@ -381,10 +440,16 @@ impl IssueService {
             item.version += 1;
             tx.execute(
                 "UPDATE work_items SET parent_id=?1, updated_at=?2, version=?3 WHERE id=?4",
-                rusqlite::params![resolve_parent_row_id(tx, project.id, item.parent_id.as_deref())?, item.updated_at, item.version, existing.row_id],
+                rusqlite::params![
+                    resolve_parent_row_id(tx, project.id, item.parent_id.as_deref())?,
+                    item.updated_at,
+                    item.version,
+                    existing.row_id
+                ],
             )
             .map_err(|err| CliError::Operational(err.into()))?;
-            let command = create_command(tx, Some(project.id), "item.update", None).map_err(CliError::Operational)?;
+            let command = create_command(tx, Some(project.id), "item.update", None)
+                .map_err(CliError::Operational)?;
             let persisted = get_item_by_public_id(tx, project.id, item_id)?;
             insert_event(
                 tx,
@@ -409,5 +474,65 @@ impl IssueService {
 
     fn open(&self) -> CliResult<Connection> {
         open_connection(&self.db_path).map_err(CliError::Operational)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    fn setup_service() -> (tempfile::TempDir, IssueService) {
+        let temp = tempdir().unwrap();
+        let db_path = temp.path().join("test.sqlite3");
+        let service = IssueService::from_db_path(db_path).unwrap();
+
+        let mut conn = open_connection(&service.db_path).unwrap();
+        with_write(&mut conn, &owner_id(), |tx| {
+            let project = get_or_create_project(tx, temp.path(), true)?;
+            set_project_override(tx, &project.public_id)?;
+            Ok(())
+        })
+        .unwrap();
+
+        (temp, service)
+    }
+
+    #[test]
+    fn update_item_persists_priority_changes() {
+        let (_temp, service) = setup_service();
+
+        let created = service
+            .create_item(CreateItemInput {
+                title: "Initial".to_string(),
+                description: "Created from test".to_string(),
+                priority: PriorityArg::Low,
+                parent: None,
+            })
+            .unwrap();
+
+        let updated = service
+            .update_item(UpdateItemInput {
+                item_id: created.public_id.clone(),
+                title: "Updated".to_string(),
+                description: "Updated from test".to_string(),
+                priority: PriorityArg::Urgent,
+            })
+            .unwrap();
+
+        assert_eq!(updated.priority, "urgent");
+
+        let active_project = service
+            .load_overview(None)
+            .unwrap()
+            .active_project
+            .expect("active project");
+
+        let detail = service
+            .item_detail(&active_project.public_id, &created.public_id)
+            .unwrap();
+        assert_eq!(detail.item.title, "Updated");
+        assert_eq!(detail.item.description, "Updated from test");
+        assert_eq!(detail.item.priority, "urgent");
     }
 }

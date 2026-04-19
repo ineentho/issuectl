@@ -5,9 +5,12 @@ use gpui::{
     App, Application, Bounds, Context, Entity, FocusHandle, Focusable, KeyBinding, SharedString,
     Window, WindowBounds, WindowOptions, div, prelude::*, px, rgb, size,
 };
+use std::collections::HashSet;
 
 use crate::domain::{CommandRecord, EventRecord, PriorityArg, StatusArg, TreeNode};
-use crate::services::{CreateItemInput, IssueService, ItemDetail, OverviewSnapshot, UpdateItemInput};
+use crate::services::{
+    CreateItemInput, IssueService, ItemDetail, OverviewSnapshot, UpdateItemInput,
+};
 use input::TextInput;
 
 pub fn run_ui() -> Result<()> {
@@ -57,6 +60,8 @@ struct IssueUi {
     item_detail: Option<ItemDetail>,
     command_detail: Option<(CommandRecord, Vec<EventRecord>)>,
     flash: Option<FlashMessage>,
+    create_priority: PriorityArg,
+    edit_priority: PriorityArg,
     create_title: Entity<TextInput>,
     create_description: Entity<TextInput>,
     create_parent: Entity<TextInput>,
@@ -87,6 +92,8 @@ impl IssueUi {
             item_detail: None,
             command_detail: None,
             flash: None,
+            create_priority: PriorityArg::Medium,
+            edit_priority: PriorityArg::Medium,
             create_title,
             create_description,
             create_parent,
@@ -101,17 +108,30 @@ impl IssueUi {
     }
 
     fn refresh(&mut self, cx: &mut Context<Self>) {
-        match self.service.load_overview(self.selected_project_id.as_deref()) {
+        match self
+            .service
+            .load_overview(self.selected_project_id.as_deref())
+        {
             Ok(overview) => {
                 if self.selected_project_id.is_none() {
-                    self.selected_project_id = overview.active_project.as_ref().map(|p| p.public_id.clone());
+                    self.selected_project_id = overview
+                        .active_project
+                        .as_ref()
+                        .map(|p| p.public_id.clone());
                 }
-                let active_project_id = overview.active_project.as_ref().map(|p| p.public_id.clone());
+                let active_project_id = overview
+                    .active_project
+                    .as_ref()
+                    .map(|p| p.public_id.clone());
                 self.overview = Some(overview);
-                if let (Some(project_id), Some(item_id)) = (active_project_id.as_deref(), self.selected_item_id.as_deref()) {
+                if let (Some(project_id), Some(item_id)) = (
+                    active_project_id.as_deref(),
+                    self.selected_item_id.as_deref(),
+                ) {
                     match self.service.item_detail(project_id, item_id) {
                         Ok(detail) => {
                             self.sync_edit_inputs(&detail, cx);
+                            self.sync_selected_priority(&detail, cx);
                             self.item_detail = Some(detail);
                         }
                         Err(_) => {
@@ -127,7 +147,10 @@ impl IssueUi {
                 }
             }
             Err(err) => {
-                self.flash = Some(FlashMessage { text: err.to_string().into(), is_error: true });
+                self.flash = Some(FlashMessage {
+                    text: err.to_string().into(),
+                    is_error: true,
+                });
                 self.overview = None;
                 self.item_detail = None;
             }
@@ -138,16 +161,28 @@ impl IssueUi {
     fn sync_edit_inputs(&self, detail: &ItemDetail, cx: &mut Context<Self>) {
         let title = detail.item.title.clone();
         let description = detail.item.description.clone();
-        self.edit_title.update(cx, |input, cx| input.set_value(title, cx));
-        self.edit_description.update(cx, |input, cx| input.set_value(description, cx));
+        self.edit_title
+            .update(cx, |input, cx| input.set_value(title, cx));
+        self.edit_description
+            .update(cx, |input, cx| input.set_value(description, cx));
         self.move_parent.update(cx, |input, cx| {
             input.set_value(detail.item.parent_id.clone().unwrap_or_default(), cx)
         });
-        self.block_target.update(cx, |input, cx| input.set_value(detail.item.public_id.clone(), cx));
+        self.block_target.update(cx, |input, cx| {
+            input.set_value(detail.item.public_id.clone(), cx)
+        });
+    }
+
+    fn sync_selected_priority(&mut self, detail: &ItemDetail, cx: &mut Context<Self>) {
+        self.edit_priority = detail.item.priority.parse().unwrap_or(PriorityArg::Medium);
+        cx.notify();
     }
 
     fn set_flash(&mut self, text: impl Into<SharedString>, is_error: bool, cx: &mut Context<Self>) {
-        self.flash = Some(FlashMessage { text: text.into(), is_error });
+        self.flash = Some(FlashMessage {
+            text: text.into(),
+            is_error,
+        });
         cx.notify();
     }
 
@@ -163,7 +198,142 @@ impl IssueUi {
         entity.read(cx).value()
     }
 
-    fn with_result<T>(&mut self, result: crate::error::CliResult<T>, success: &str, cx: &mut Context<Self>) -> Option<T> {
+    fn set_input_value(
+        entity: &Entity<TextInput>,
+        value: impl Into<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let value = value.into();
+        entity.update(cx, |input, cx| input.set_value(value, cx));
+    }
+
+    fn set_create_priority_click(&mut self, priority: PriorityArg, cx: &mut Context<Self>) {
+        self.create_priority = priority;
+        cx.notify();
+    }
+
+    fn set_edit_priority_click(&mut self, priority: PriorityArg, cx: &mut Context<Self>) {
+        self.edit_priority = priority;
+        cx.notify();
+    }
+
+    fn choose_create_parent_candidate(&mut self, item_id: String, cx: &mut Context<Self>) {
+        Self::set_input_value(&self.create_parent, item_id, cx);
+    }
+
+    fn choose_move_parent_candidate(&mut self, item_id: String, cx: &mut Context<Self>) {
+        Self::set_input_value(&self.move_parent, item_id, cx);
+    }
+
+    fn choose_root_parent(&mut self, _: &gpui::ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        self.move_parent.update(cx, |input, cx| input.clear(cx));
+    }
+
+    fn choose_blocker_candidate(&mut self, item_id: String, cx: &mut Context<Self>) {
+        Self::set_input_value(&self.block_by, item_id, cx);
+    }
+
+    fn choose_selected_as_block_target(
+        &mut self,
+        _: &gpui::ClickEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(item_id) = self.selected_item_id.clone() {
+            Self::set_input_value(&self.block_target, item_id, cx);
+        }
+    }
+
+    fn create_parent_candidates(&self) -> Vec<crate::domain::WorkItemRecord> {
+        let mut seen = HashSet::new();
+        let mut candidates = Vec::new();
+        if let Some(overview) = &self.overview {
+            for node in &overview.tree {
+                push_candidate(&mut candidates, &mut seen, &node.item);
+            }
+            for item in &overview.next_items {
+                push_candidate(&mut candidates, &mut seen, item);
+            }
+            for item in &overview.items {
+                push_candidate(&mut candidates, &mut seen, item);
+            }
+        }
+        candidates.truncate(8);
+        candidates
+    }
+
+    fn move_parent_candidates(&self) -> Vec<crate::domain::WorkItemRecord> {
+        let Some(selected_id) = self.selected_item_id.as_deref() else {
+            return Vec::new();
+        };
+        let mut seen = HashSet::new();
+        let mut blocked = HashSet::new();
+        blocked.insert(selected_id.to_string());
+        if let Some(overview) = &self.overview {
+            collect_descendant_ids(&overview.tree, selected_id, &mut blocked);
+        }
+
+        let mut candidates = Vec::new();
+        if let (Some(overview), Some(detail)) = (&self.overview, &self.item_detail) {
+            if let Some(parent_id) = detail.item.parent_id.as_deref()
+                && let Some(item) = overview
+                    .items
+                    .iter()
+                    .find(|item| item.public_id == parent_id)
+            {
+                push_candidate_if_allowed(&mut candidates, &mut seen, &blocked, item);
+            }
+            for node in &overview.tree {
+                push_candidate_if_allowed(&mut candidates, &mut seen, &blocked, &node.item);
+            }
+            for item in &overview.next_items {
+                push_candidate_if_allowed(&mut candidates, &mut seen, &blocked, item);
+            }
+            for item in &overview.items {
+                push_candidate_if_allowed(&mut candidates, &mut seen, &blocked, item);
+            }
+        }
+        candidates.truncate(8);
+        candidates
+    }
+
+    fn blocker_candidates(&self) -> Vec<crate::domain::WorkItemRecord> {
+        let Some(selected_id) = self.selected_item_id.as_deref() else {
+            return Vec::new();
+        };
+        let mut seen = HashSet::new();
+        let mut candidates = Vec::new();
+        if let (Some(overview), Some(detail)) = (&self.overview, &self.item_detail) {
+            for blocker_id in &detail.blocked_by {
+                if let Some(item) = overview
+                    .items
+                    .iter()
+                    .find(|item| item.public_id == *blocker_id)
+                {
+                    push_candidate(&mut candidates, &mut seen, item);
+                }
+            }
+            for item in &overview.next_items {
+                if item.public_id != selected_id {
+                    push_candidate(&mut candidates, &mut seen, item);
+                }
+            }
+            for item in &overview.items {
+                if item.public_id != selected_id {
+                    push_candidate(&mut candidates, &mut seen, item);
+                }
+            }
+        }
+        candidates.truncate(8);
+        candidates
+    }
+
+    fn with_result<T>(
+        &mut self,
+        result: crate::error::CliResult<T>,
+        success: &str,
+        cx: &mut Context<Self>,
+    ) -> Option<T> {
         match result {
             Ok(value) => {
                 self.set_flash(success.to_string(), false, cx);
@@ -181,7 +351,14 @@ impl IssueUi {
     }
 
     fn init_click(&mut self, _: &gpui::ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
-        if self.with_result(self.service.init_current_repo_project(), "Initialized current repo project.", cx).is_some() {
+        if self
+            .with_result(
+                self.service.init_current_repo_project(),
+                "Initialized current repo project.",
+                cx,
+            )
+            .is_some()
+        {
             self.refresh(cx);
         }
     }
@@ -198,8 +375,12 @@ impl IssueUi {
             self.service.create_item(CreateItemInput {
                 title: title.trim().to_string(),
                 description: description.trim().to_string(),
-                priority: PriorityArg::Medium,
-                parent: if parent.trim().is_empty() { None } else { Some(parent.trim().to_string()) },
+                priority: self.create_priority,
+                parent: if parent.trim().is_empty() {
+                    None
+                } else {
+                    Some(parent.trim().to_string())
+                },
             }),
             "Created item.",
             cx,
@@ -207,8 +388,10 @@ impl IssueUi {
         if let Some(item) = created {
             self.selected_item_id = Some(item.public_id);
             self.create_title.update(cx, |input, cx| input.clear(cx));
-            self.create_description.update(cx, |input, cx| input.clear(cx));
+            self.create_description
+                .update(cx, |input, cx| input.clear(cx));
             self.create_parent.update(cx, |input, cx| input.clear(cx));
+            self.create_priority = PriorityArg::Medium;
             self.refresh(cx);
         }
     }
@@ -224,11 +407,19 @@ impl IssueUi {
             return;
         }
         let description = Self::read_input(&self.edit_description, cx);
-        if self.with_result(
-            self.service.update_item(UpdateItemInput { item_id, title: title.trim().to_string(), description: description.trim().to_string() }),
-            "Updated item.",
-            cx,
-        ).is_some() {
+        if self
+            .with_result(
+                self.service.update_item(UpdateItemInput {
+                    item_id,
+                    title: title.trim().to_string(),
+                    description: description.trim().to_string(),
+                    priority: self.edit_priority,
+                }),
+                "Updated item.",
+                cx,
+            )
+            .is_some()
+        {
             self.refresh(cx);
         }
     }
@@ -239,7 +430,14 @@ impl IssueUi {
             return;
         };
         let parent = Self::read_input(&self.move_parent, cx);
-        if self.with_result(self.service.move_item(&item_id, Some(parent.trim())), "Moved item.", cx).is_some() {
+        if self
+            .with_result(
+                self.service.move_item(&item_id, Some(parent.trim())),
+                "Moved item.",
+                cx,
+            )
+            .is_some()
+        {
             self.refresh(cx);
         }
     }
@@ -249,7 +447,14 @@ impl IssueUi {
             self.set_flash("Select an item first.", true, cx);
             return;
         };
-        if self.with_result(self.service.set_status(&item_id, status), "Updated status.", cx).is_some() {
+        if self
+            .with_result(
+                self.service.set_status(&item_id, status),
+                "Updated status.",
+                cx,
+            )
+            .is_some()
+        {
             self.refresh(cx);
         }
     }
@@ -259,7 +464,18 @@ impl IssueUi {
             self.set_flash("Select an item first.", true, cx);
             return;
         };
-        if self.with_result(self.service.set_ready(&item_id, ready), if ready { "Marked ready." } else { "Marked unready." }, cx).is_some() {
+        if self
+            .with_result(
+                self.service.set_ready(&item_id, ready),
+                if ready {
+                    "Marked ready."
+                } else {
+                    "Marked unready."
+                },
+                cx,
+            )
+            .is_some()
+        {
             self.refresh(cx);
         }
     }
@@ -268,26 +484,57 @@ impl IssueUi {
         let item_id = Self::read_input(&self.block_target, cx);
         let blocker_id = Self::read_input(&self.block_by, cx);
         if item_id.trim().is_empty() || blocker_id.trim().is_empty() {
-            self.set_flash("Blocked item id and blocker item id are required.", true, cx);
+            self.set_flash(
+                "Blocked item id and blocker item id are required.",
+                true,
+                cx,
+            );
             return;
         }
-        if self.with_result(self.service.set_block_relation(item_id.trim(), blocker_id.trim(), add), if add { "Added blocker relation." } else { "Removed blocker relation." }, cx).is_some() {
+        if self
+            .with_result(
+                self.service
+                    .set_block_relation(item_id.trim(), blocker_id.trim(), add),
+                if add {
+                    "Added blocker relation."
+                } else {
+                    "Removed blocker relation."
+                },
+                cx,
+            )
+            .is_some()
+        {
             self.refresh(cx);
         }
     }
 
-    fn undo_selected_click(&mut self, _: &gpui::ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn undo_selected_click(
+        &mut self,
+        _: &gpui::ClickEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(command_id) = self.selected_command_id.clone() else {
             self.set_flash("Select a command first.", true, cx);
             return;
         };
-        if self.with_result(self.service.undo(&command_id), "Undo applied.", cx).is_some() {
+        if self
+            .with_result(self.service.undo(&command_id), "Undo applied.", cx)
+            .is_some()
+        {
             self.refresh(cx);
         }
     }
 
     fn choose_project(&mut self, project_id: String, cx: &mut Context<Self>) {
-        if self.with_result(self.service.use_project(&project_id), "Selected project.", cx).is_some() {
+        if self
+            .with_result(
+                self.service.use_project(&project_id),
+                "Selected project.",
+                cx,
+            )
+            .is_some()
+        {
             self.selected_project_id = Some(project_id);
             self.selected_item_id = None;
             self.selected_command_id = None;
@@ -301,6 +548,7 @@ impl IssueUi {
             match self.service.item_detail(project_id, &item_id) {
                 Ok(detail) => {
                     self.sync_edit_inputs(&detail, cx);
+                    self.sync_selected_priority(&detail, cx);
                     self.item_detail = Some(detail);
                     cx.notify();
                 }
@@ -357,7 +605,12 @@ fn panel(title: &str) -> gpui::Div {
         .border_1()
         .border_color(rgb(0xd9dde7))
         .rounded_md()
-        .child(div().text_sm().font_weight(gpui::FontWeight::BOLD).child(title.to_string()))
+        .child(
+            div()
+                .text_sm()
+                .font_weight(gpui::FontWeight::BOLD)
+                .child(title.to_string()),
+        )
 }
 
 fn metric_card(label: &str, value: usize) -> gpui::Div {
@@ -371,7 +624,12 @@ fn metric_card(label: &str, value: usize) -> gpui::Div {
         .border_1()
         .border_color(rgb(0xd9dde7))
         .rounded_md()
-        .child(div().text_xs().text_color(rgb(0x586172)).child(label.to_string()))
+        .child(
+            div()
+                .text_xs()
+                .text_color(rgb(0x586172))
+                .child(label.to_string()),
+        )
         .child(div().text_xl().child(value.to_string()))
 }
 
@@ -380,13 +638,38 @@ impl Render for IssueUi {
         let overview = self.overview.clone();
         let item_detail = self.item_detail.clone();
         let command_detail = self.command_detail.clone();
-        let active_project_id = overview.as_ref().and_then(|o| o.active_project.as_ref()).map(|p| p.public_id.clone());
-        let active_project_name = overview.as_ref().and_then(|o| o.active_project.as_ref()).map(|p| p.name.clone()).unwrap_or_else(|| "No active project".to_string());
-        let items = overview.as_ref().map(|o| o.items.clone()).unwrap_or_default();
-        let tree = overview.as_ref().map(|o| o.tree.clone()).unwrap_or_default();
-        let next_items = overview.as_ref().map(|o| o.next_items.clone()).unwrap_or_default();
-        let commands = overview.as_ref().map(|o| o.commands.clone()).unwrap_or_default();
-        let projects = overview.as_ref().map(|o| o.projects.clone()).unwrap_or_default();
+        let active_project_id = overview
+            .as_ref()
+            .and_then(|o| o.active_project.as_ref())
+            .map(|p| p.public_id.clone());
+        let active_project_name = overview
+            .as_ref()
+            .and_then(|o| o.active_project.as_ref())
+            .map(|p| p.name.clone())
+            .unwrap_or_else(|| "No active project".to_string());
+        let items = overview
+            .as_ref()
+            .map(|o| o.items.clone())
+            .unwrap_or_default();
+        let tree = overview
+            .as_ref()
+            .map(|o| o.tree.clone())
+            .unwrap_or_default();
+        let next_items = overview
+            .as_ref()
+            .map(|o| o.next_items.clone())
+            .unwrap_or_default();
+        let commands = overview
+            .as_ref()
+            .map(|o| o.commands.clone())
+            .unwrap_or_default();
+        let projects = overview
+            .as_ref()
+            .map(|o| o.projects.clone())
+            .unwrap_or_default();
+        let create_parent_candidates = self.create_parent_candidates();
+        let move_parent_candidates = self.move_parent_candidates();
+        let blocker_candidates = self.blocker_candidates();
 
         let mut root = div()
             .track_focus(&self.focus_handle(cx))
@@ -409,14 +692,25 @@ impl Render for IssueUi {
                         .flex_col()
                         .gap_1()
                         .child(div().text_2xl().child("issuecli"))
-                        .child(div().text_sm().text_color(rgb(0x586172)).child(active_project_name)),
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(rgb(0x586172))
+                                .child(active_project_name),
+                        ),
                 )
                 .child(
                     div()
                         .flex()
                         .gap_2()
-                        .child(button("refresh-button", "Refresh", false).on_click(cx.listener(Self::refresh_click)))
-                        .child(button("init-button", "Init Repo", false).on_click(cx.listener(Self::init_click))),
+                        .child(
+                            button("refresh-button", "Refresh", false)
+                                .on_click(cx.listener(Self::refresh_click)),
+                        )
+                        .child(
+                            button("init-button", "Init Repo", false)
+                                .on_click(cx.listener(Self::init_click)),
+                        ),
                 ),
         );
 
@@ -426,24 +720,27 @@ impl Render for IssueUi {
                     .px_3()
                     .py_2()
                     .rounded_md()
-                    .bg(if flash.is_error { rgb(0xffe4e4) } else { rgb(0xe6f7eb) })
+                    .bg(if flash.is_error {
+                        rgb(0xffe4e4)
+                    } else {
+                        rgb(0xe6f7eb)
+                    })
                     .border_1()
-                    .border_color(if flash.is_error { rgb(0xf2b7b7) } else { rgb(0xb9dfc4) })
+                    .border_color(if flash.is_error {
+                        rgb(0xf2b7b7)
+                    } else {
+                        rgb(0xb9dfc4)
+                    })
                     .child(flash.text.clone()),
             );
         }
 
-        root = root.child(
-            div()
-                .flex()
-                .gap_3()
-                .children([
-                    metric_card("Projects", projects.len()).into_any_element(),
-                    metric_card("Items", items.len()).into_any_element(),
-                    metric_card("Actionable", next_items.len()).into_any_element(),
-                    metric_card("Recent Commands", commands.len()).into_any_element(),
-                ]),
-        );
+        root = root.child(div().flex().gap_3().children([
+            metric_card("Projects", projects.len()).into_any_element(),
+            metric_card("Items", items.len()).into_any_element(),
+            metric_card("Actionable", next_items.len()).into_any_element(),
+            metric_card("Recent Commands", commands.len()).into_any_element(),
+        ]));
 
         root = root.child(
             div()
@@ -491,13 +788,63 @@ impl Render for IssueUi {
                             panel("Create Item")
                                 .child(self.create_title.clone())
                                 .child(self.create_description.clone())
+                                .child(section_label("Priority"))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .gap_2()
+                                        .flex_wrap()
+                                        .child(button("create-priority-low", "Low", self.create_priority == PriorityArg::Low).on_click(cx.listener(|this, _, _, cx| this.set_create_priority_click(PriorityArg::Low, cx))))
+                                        .child(button("create-priority-medium", "Medium", self.create_priority == PriorityArg::Medium).on_click(cx.listener(|this, _, _, cx| this.set_create_priority_click(PriorityArg::Medium, cx))))
+                                        .child(button("create-priority-high", "High", self.create_priority == PriorityArg::High).on_click(cx.listener(|this, _, _, cx| this.set_create_priority_click(PriorityArg::High, cx))))
+                                        .child(button("create-priority-urgent", "Urgent", self.create_priority == PriorityArg::Urgent).on_click(cx.listener(|this, _, _, cx| this.set_create_priority_click(PriorityArg::Urgent, cx)))),
+                                )
                                 .child(self.create_parent.clone())
+                                .child(section_label("Parent suggestions"))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .gap_2()
+                                        .flex_wrap()
+                                        .children(create_parent_candidates.into_iter().enumerate().map(|(ix, item)| {
+                                            let item_id = item.public_id.clone();
+                                            chip(format!("{} {}", item.public_id, item.title), false)
+                                                .id(("create-parent-candidate", ix))
+                                                .on_click(cx.listener(move |this, _, _, cx| this.choose_create_parent_candidate(item_id.clone(), cx)))
+                                                .into_any_element()
+                                        })),
+                                )
                                 .child(button("create-button", "Create", false).on_click(cx.listener(Self::create_click))),
                         )
                         .child(
                             panel("Blockers")
+                                .when(item_detail.is_some(), |container| {
+                                    let detail = item_detail.clone().expect("detail");
+                                    container
+                                        .child(field_line("Selected blocked item", detail.item.public_id.clone()))
+                                        .child(field_line("Current blockers", joined_or_dash(&detail.blocked_by)))
+                                        .child(button("block-selected-target", "Use Selected Item", false).on_click(cx.listener(Self::choose_selected_as_block_target)))
+                                })
                                 .child(self.block_target.clone())
                                 .child(self.block_by.clone())
+                                .child(section_label("Blocker suggestions"))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .gap_2()
+                                        .flex_wrap()
+                                        .children(blocker_candidates.into_iter().enumerate().map(|(ix, item)| {
+                                            let item_id = item.public_id.clone();
+                                            let highlighted = item_detail
+                                                .as_ref()
+                                                .map(|detail| detail.blocked_by.iter().any(|existing| existing == &item.public_id))
+                                                .unwrap_or(false);
+                                            chip(format!("{} {}", item.public_id, item.title), highlighted)
+                                                .id(("blocker-candidate", ix))
+                                                .on_click(cx.listener(move |this, _, _, cx| this.choose_blocker_candidate(item_id.clone(), cx)))
+                                                .into_any_element()
+                                        })),
+                                )
                                 .child(
                                     div()
                                         .flex()
@@ -578,10 +925,40 @@ impl Render for IssueUi {
                             panel("Selected Item")
                                 .when(item_detail.is_some(), |container| {
                                     let detail = item_detail.clone().expect("detail");
-                                    container.child(div().text_sm().child(format!("{} [{} {} ready={}]", detail.item.public_id, detail.item.status, detail.item.priority, detail.item.ready)))
+                                    container.child(detail_header(&detail))
+                                        .child(section_label("Edit"))
                                         .child(self.edit_title.clone())
                                         .child(self.edit_description.clone())
+                                        .child(section_label("Priority"))
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .gap_2()
+                                                .flex_wrap()
+                                                .child(button("edit-priority-low", "Low", self.edit_priority == PriorityArg::Low).on_click(cx.listener(|this, _, _, cx| this.set_edit_priority_click(PriorityArg::Low, cx))))
+                                                .child(button("edit-priority-medium", "Medium", self.edit_priority == PriorityArg::Medium).on_click(cx.listener(|this, _, _, cx| this.set_edit_priority_click(PriorityArg::Medium, cx))))
+                                                .child(button("edit-priority-high", "High", self.edit_priority == PriorityArg::High).on_click(cx.listener(|this, _, _, cx| this.set_edit_priority_click(PriorityArg::High, cx))))
+                                                .child(button("edit-priority-urgent", "Urgent", self.edit_priority == PriorityArg::Urgent).on_click(cx.listener(|this, _, _, cx| this.set_edit_priority_click(PriorityArg::Urgent, cx)))),
+                                        )
+                                        .child(section_label("Parent"))
+                                        .child(field_line("Current parent", detail.item.parent_id.clone().unwrap_or_else(|| "Root".to_string())))
                                         .child(self.move_parent.clone())
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .gap_2()
+                                                .flex_wrap()
+                                                .child(button("move-root-button", "Move To Root", false).on_click(cx.listener(Self::choose_root_parent)))
+                                                .children(move_parent_candidates.into_iter().enumerate().map(|(ix, item)| {
+                                                    let item_id = item.public_id.clone();
+                                                    let highlighted = detail.item.parent_id.as_deref() == Some(item.public_id.as_str());
+                                                    chip(format!("{} {}", item.public_id, item.title), highlighted)
+                                                        .id(("move-parent-candidate", ix))
+                                                        .on_click(cx.listener(move |this, _, _, cx| this.choose_move_parent_candidate(item_id.clone(), cx)))
+                                                        .into_any_element()
+                                                })),
+                                        )
+                                        .child(section_label("Actions"))
                                         .child(
                                             div()
                                                 .flex()
@@ -593,14 +970,14 @@ impl Render for IssueUi {
                                                 .child(button("unready-button", "Unready", false).on_click(cx.listener(|this, _, _, cx| this.set_ready_click(false, cx))))
                                                 .child(button("todo-button", "Todo", false).on_click(cx.listener(|this, _, _, cx| this.set_status_click(StatusArg::Todo, cx))))
                                                 .child(button("progress-button", "In Progress", false).on_click(cx.listener(|this, _, _, cx| this.set_status_click(StatusArg::InProgress, cx))))
-                                                .child(button("done-button", "Done", false).on_click(cx.listener(|this, _, _, cx| this.set_status_click(StatusArg::Done, cx))))
-                                                .child(button("cancel-button", "Cancel", false).on_click(cx.listener(|this, _, _, cx| this.set_status_click(StatusArg::Cancelled, cx)))),
+                                                 .child(button("done-button", "Done", false).on_click(cx.listener(|this, _, _, cx| this.set_status_click(StatusArg::Done, cx))))
+                                                 .child(button("cancel-button", "Cancel", false).on_click(cx.listener(|this, _, _, cx| this.set_status_click(StatusArg::Cancelled, cx)))),
                                         )
-                                        .child(div().text_sm().child(format!("parent={}", detail.item.parent_id.unwrap_or_else(|| "-".to_string()))))
-                                        .child(div().text_sm().child(format!("children={}", detail.children.iter().map(|item| item.public_id.clone()).collect::<Vec<_>>().join(", "))))
-                                        .child(div().text_sm().child(format!("blocked_by={}", if detail.blocked_by.is_empty() { "-".to_string() } else { detail.blocked_by.join(", ") })))
-                                        .child(div().text_sm().child(format!("blocks={}", if detail.blockers.is_empty() { "-".to_string() } else { detail.blockers.join(", ") })) )
-                                        .child(div().text_sm().text_color(rgb(0x586172)).child("Recent item events"))
+                                        .child(section_label("Relationships"))
+                                        .child(field_line("Children", join_item_labels(&detail.children)))
+                                        .child(field_line("Blocked by", joined_or_dash(&detail.blocked_by)))
+                                        .child(field_line("Blocks", joined_or_dash(&detail.blockers)))
+                                        .child(section_label("Recent item events"))
                                         .child(
                                             div()
                                                 .flex()
@@ -657,7 +1034,141 @@ impl Render for IssueUi {
     }
 }
 
-fn render_tree_list(tree: &[TreeNode], selected_item_id: Option<&str>, cx: &mut Context<IssueUi>) -> impl IntoElement {
+fn section_label(text: &str) -> gpui::Div {
+    div()
+        .text_xs()
+        .font_weight(gpui::FontWeight::BOLD)
+        .text_color(rgb(0x586172))
+        .child(text.to_string())
+}
+
+fn field_line(label: &str, value: String) -> gpui::Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .child(section_label(label))
+        .child(div().text_sm().child(value))
+}
+
+fn chip(label: String, highlighted: bool) -> gpui::Div {
+    let mut chip = div()
+        .px_2()
+        .py_1()
+        .rounded_sm()
+        .border_1()
+        .border_color(rgb(0xd9dde7))
+        .cursor_pointer()
+        .text_xs();
+    chip = if highlighted {
+        chip.bg(rgb(0xdfe7ff)).text_color(rgb(0x1d2330))
+    } else {
+        chip.bg(rgb(0xffffff)).text_color(rgb(0x1d2330))
+    };
+    chip.hover(|this| this.opacity(0.9)).child(label)
+}
+
+fn detail_header(detail: &ItemDetail) -> gpui::Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .child(
+            div()
+                .text_lg()
+                .child(format!("{} {}", detail.item.public_id, detail.item.title)),
+        )
+        .child(
+            div()
+                .flex()
+                .gap_2()
+                .flex_wrap()
+                .child(chip(format!("status {}", detail.item.status), false))
+                .child(chip(format!("priority {}", detail.item.priority), false))
+                .child(chip(
+                    format!("ready {}", detail.item.ready),
+                    detail.item.ready,
+                )),
+        )
+        .child(div().text_sm().text_color(rgb(0x586172)).child(
+            if detail.item.description.is_empty() {
+                "No description".to_string()
+            } else {
+                detail.item.description.clone()
+            },
+        ))
+}
+
+fn joined_or_dash(items: &[String]) -> String {
+    if items.is_empty() {
+        "-".to_string()
+    } else {
+        items.join(", ")
+    }
+}
+
+fn join_item_labels(items: &[crate::domain::WorkItemRecord]) -> String {
+    if items.is_empty() {
+        "-".to_string()
+    } else {
+        items
+            .iter()
+            .map(|item| format!("{} {}", item.public_id, item.title))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
+fn push_candidate(
+    candidates: &mut Vec<crate::domain::WorkItemRecord>,
+    seen: &mut HashSet<String>,
+    item: &crate::domain::WorkItemRecord,
+) {
+    if seen.insert(item.public_id.clone()) {
+        candidates.push(item.clone());
+    }
+}
+
+fn push_candidate_if_allowed(
+    candidates: &mut Vec<crate::domain::WorkItemRecord>,
+    seen: &mut HashSet<String>,
+    blocked: &HashSet<String>,
+    item: &crate::domain::WorkItemRecord,
+) {
+    if !blocked.contains(&item.public_id) {
+        push_candidate(candidates, seen, item);
+    }
+}
+
+fn collect_descendant_ids(
+    tree: &[TreeNode],
+    selected_id: &str,
+    blocked: &mut HashSet<String>,
+) -> bool {
+    for node in tree {
+        if node.item.public_id == selected_id {
+            collect_tree_ids(&node.children, blocked);
+            return true;
+        }
+        if collect_descendant_ids(&node.children, selected_id, blocked) {
+            return true;
+        }
+    }
+    false
+}
+
+fn collect_tree_ids(tree: &[TreeNode], blocked: &mut HashSet<String>) {
+    for node in tree {
+        blocked.insert(node.item.public_id.clone());
+        collect_tree_ids(&node.children, blocked);
+    }
+}
+
+fn render_tree_list(
+    tree: &[TreeNode],
+    selected_item_id: Option<&str>,
+    cx: &mut Context<IssueUi>,
+) -> impl IntoElement {
     let mut rows = Vec::new();
     for node in tree {
         push_tree_rows(&mut rows, node, 0, selected_item_id, cx);
@@ -683,9 +1194,19 @@ fn push_tree_rows(
         .border_1()
         .border_color(rgb(0xd9dde7))
         .cursor_pointer()
-        .child(format!("{} [{} ready={}] {}", node.item.public_id, node.item.status, node.item.ready, node.item.title));
-    row = if selected { row.bg(rgb(0xdfe7ff)) } else { row.bg(rgb(0xffffff)) };
-    rows.push(row.on_click(cx.listener(move |this, _, _, cx| this.choose_item(item_id.clone(), cx))).into_any_element());
+        .child(format!(
+            "{} [{} ready={}] {}",
+            node.item.public_id, node.item.status, node.item.ready, node.item.title
+        ));
+    row = if selected {
+        row.bg(rgb(0xdfe7ff))
+    } else {
+        row.bg(rgb(0xffffff))
+    };
+    rows.push(
+        row.on_click(cx.listener(move |this, _, _, cx| this.choose_item(item_id.clone(), cx)))
+            .into_any_element(),
+    );
     for child in &node.children {
         push_tree_rows(rows, child, depth + 1, selected_item_id, cx);
     }

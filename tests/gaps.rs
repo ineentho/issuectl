@@ -299,7 +299,11 @@ fn invalid_enum_values_are_rejected_by_clap() {
 fn next_wait_blocks_until_item_becomes_ready() {
     let (repo, db_path) = setup_repo();
     json_output(repo.path(), &db_path, &["--json", "init"]);
-    success_output(repo.path(), &db_path, &["item", "create", "--title", "Waiting Task"]);
+    success_output(
+        repo.path(),
+        &db_path,
+        &["item", "create", "--title", "Waiting Task"],
+    );
 
     let mut child = Command::new(assert_cmd::cargo::cargo_bin("issuecli"))
         .current_dir(repo.path())
@@ -319,12 +323,20 @@ fn next_wait_blocks_until_item_becomes_ready() {
             assert!(status.success());
             break;
         }
-        assert!(start.elapsed() < Duration::from_secs(5), "wait command did not complete");
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "wait command did not complete"
+        );
         thread::sleep(Duration::from_millis(50));
     }
 
     let mut stdout = String::new();
-    child.stdout.take().unwrap().read_to_string(&mut stdout).unwrap();
+    child
+        .stdout
+        .take()
+        .unwrap()
+        .read_to_string(&mut stdout)
+        .unwrap();
     let json: Value = serde_json::from_str(&stdout).unwrap();
     assert_eq!(json["items"][0]["public_id"], "WI-1");
 }

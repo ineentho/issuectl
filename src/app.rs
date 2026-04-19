@@ -6,8 +6,8 @@ use serde_json::json;
 
 use crate::cli::{
     Commands, HistoryArgs, HistoryCommand, ItemArgs, ItemCommand, ItemCreateArgs, ItemListArgs,
-    ItemMoveArgs, ItemUpdateArgs, NextArgs, ProjectArgs, ProjectCommand, ProjectUpdateArgs,
-    ReviewArgs, ReviewCommand, UndoArgs,
+    ItemMoveArgs, ItemReadyArgs, ItemStatusArgs, ItemUpdateArgs, NextArgs, ProjectArgs,
+    ProjectCommand, ProjectUpdateArgs, ReviewArgs, ReviewCommand, UndoArgs,
 };
 use crate::db::{
     initialize_database, now_string, open_connection, owner_id, resolve_db_path, with_write,
@@ -25,7 +25,7 @@ use crate::repo::{
     get_item_by_public_id_readonly, get_or_create_project, insert_event, list_blocked_by,
     list_blockers, list_children, list_commands, list_item_history, list_items, list_projects,
     list_root_items, resolve_active_item, resolve_active_project, resolve_active_project_readonly,
-    resolve_active_project_with_override, resolve_parent_row_id, resolve_project_tx,
+    resolve_active_project_with_override, resolve_parent_row_id, resolve_project_tx_with_override,
     select_next_items, set_project_override, undo_command, update_project_prefix,
 };
 
@@ -134,17 +134,21 @@ impl App {
             ItemCommand::List(args) => self.item_list(args),
             ItemCommand::Show { item_id } => self.item_show(&item_id),
             ItemCommand::Update(args) => self.item_update(args),
-            ItemCommand::Status { item_id, status } => self.item_status(&item_id, status),
-            ItemCommand::Ready { item_id } => self.item_ready_state(&item_id, true),
-            ItemCommand::Unready { item_id } => self.item_ready_state(&item_id, false),
-            ItemCommand::Block {
-                item_id,
-                blocker_id,
-            } => self.item_block(&item_id, &blocker_id, true),
-            ItemCommand::Unblock {
-                item_id,
-                blocker_id,
-            } => self.item_block(&item_id, &blocker_id, false),
+            ItemCommand::Status(args) => self.item_status(args),
+            ItemCommand::Ready(args) => self.item_ready_state(args, true),
+            ItemCommand::Unready(args) => self.item_ready_state(args, false),
+            ItemCommand::Block(args) => self.item_block(
+                &args.item_id,
+                &args.blocker_id,
+                args.project.as_deref(),
+                true,
+            ),
+            ItemCommand::Unblock(args) => self.item_block(
+                &args.item_id,
+                &args.blocker_id,
+                args.project.as_deref(),
+                false,
+            ),
             ItemCommand::Blockers { item_id } => self.item_blockers(&item_id),
             ItemCommand::Move(args) => self.item_move(args),
             ItemCommand::Children { item_id } => self.item_children(&item_id),
@@ -162,7 +166,12 @@ impl App {
         let mut conn = open_connection(&self.db_path)?;
         let owner = owner_id();
         let item = with_write(&mut conn, &owner, |tx| {
-            let project = resolve_project_tx(tx, true)?;
+            let project = resolve_project_tx_with_override(
+                tx,
+                args.project.as_deref(),
+                true,
+                self.json_output,
+            )?;
             let parent = match args.parent.as_deref() {
                 Some(parent_id) => Some(get_item_by_public_id(tx, project.id, parent_id)?),
                 None => None,
@@ -283,7 +292,12 @@ impl App {
         let mut conn = open_connection(&self.db_path)?;
         let owner = owner_id();
         let updated = with_write(&mut conn, &owner, |tx| {
-            let project = resolve_project_tx(tx, true)?;
+            let project = resolve_project_tx_with_override(
+                tx,
+                args.project.as_deref(),
+                true,
+                self.json_output,
+            )?;
             let existing = get_item_by_public_id(tx, project.id, &args.item_id)?;
             let before = work_item_state(&existing.record);
             let mut item = existing.record.clone();
@@ -340,24 +354,30 @@ impl App {
         emit_item(self.json_output, "Updated item", &updated)
     }
 
-    fn item_status(&self, item_id: &str, status: StatusArg) -> CliResult<()> {
+    fn item_status(&self, args: ItemStatusArgs) -> CliResult<()> {
         self.item_update(ItemUpdateArgs {
-            item_id: item_id.to_string(),
+            item_id: args.item_id,
             title: None,
             description: None,
-            status: Some(status),
+            status: Some(args.status),
             priority: None,
             parent: None,
             root: false,
+            project: args.project,
         })
     }
 
-    fn item_ready_state(&self, item_id: &str, ready: bool) -> CliResult<()> {
+    fn item_ready_state(&self, args: ItemReadyArgs, ready: bool) -> CliResult<()> {
         let mut conn = open_connection(&self.db_path)?;
         let owner = owner_id();
         let updated = with_write(&mut conn, &owner, |tx| {
-            let project = resolve_project_tx(tx, true)?;
-            let existing = get_item_by_public_id(tx, project.id, item_id)?;
+            let project = resolve_project_tx_with_override(
+                tx,
+                args.project.as_deref(),
+                true,
+                self.json_output,
+            )?;
+            let existing = get_item_by_public_id(tx, project.id, &args.item_id)?;
             let before = work_item_state(&existing.record);
             let mut item = existing.record.clone();
             item.ready = ready;
@@ -380,7 +400,7 @@ impl App {
                 if ready { "item.ready" } else { "item.unready" },
                 None,
             )?;
-            let persisted = get_item_by_public_id(tx, project.id, item_id)?;
+            let persisted = get_item_by_public_id(tx, project.id, &args.item_id)?;
             insert_event(
                 tx,
                 command.id,
@@ -405,11 +425,17 @@ impl App {
         )
     }
 
-    fn item_block(&self, item_id: &str, blocker_id: &str, add: bool) -> CliResult<()> {
+    fn item_block(
+        &self,
+        item_id: &str,
+        blocker_id: &str,
+        project_id: Option<&str>,
+        add: bool,
+    ) -> CliResult<()> {
         let mut conn = open_connection(&self.db_path)?;
         let owner = owner_id();
         let payload = with_write(&mut conn, &owner, |tx| {
-            let project = resolve_project_tx(tx, true)?;
+            let project = resolve_project_tx_with_override(tx, project_id, true, self.json_output)?;
             let blocked = get_item_by_public_id(tx, project.id, item_id)?;
             let blocker = get_item_by_public_id(tx, project.id, blocker_id)?;
 
@@ -496,6 +522,7 @@ impl App {
             priority: None,
             parent: args.parent,
             root: args.root,
+            project: args.project,
         })
     }
 

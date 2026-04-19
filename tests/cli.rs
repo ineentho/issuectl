@@ -188,6 +188,179 @@ fn project_use_override_wins_over_repo_context_for_reads_and_writes() {
 }
 
 #[test]
+fn mutating_item_commands_accept_explicit_project_targeting() {
+    let (repo_a, db_path) = setup_repo();
+    let (repo_b, _) = setup_repo();
+
+    json_output(repo_a.path(), &db_path, &["--json", "init"]);
+    json_output(repo_b.path(), &db_path, &["--json", "init"]);
+    json_output(
+        repo_b.path(),
+        &db_path,
+        &["--json", "project", "update", "PRJ-2", "--prefix", "app"],
+    );
+    json_output(
+        repo_a.path(),
+        &db_path,
+        &["--json", "project", "use", "PRJ-1"],
+    );
+
+    let parent = json_output(
+        repo_a.path(),
+        &db_path,
+        &[
+            "--json",
+            "item",
+            "create",
+            "--project",
+            "PRJ-2",
+            "--title",
+            "Parent",
+        ],
+    );
+    assert_eq!(parent["item"]["public_id"], "APP-1");
+
+    let child = json_output(
+        repo_a.path(),
+        &db_path,
+        &[
+            "--json",
+            "item",
+            "create",
+            "--project",
+            "PRJ-2",
+            "--title",
+            "Child",
+        ],
+    );
+    assert_eq!(child["item"]["public_id"], "APP-2");
+
+    let blocker = json_output(
+        repo_a.path(),
+        &db_path,
+        &[
+            "--json",
+            "item",
+            "create",
+            "--project",
+            "PRJ-2",
+            "--title",
+            "Blocker",
+        ],
+    );
+    assert_eq!(blocker["item"]["public_id"], "APP-3");
+
+    json_output(
+        repo_a.path(),
+        &db_path,
+        &[
+            "--json",
+            "item",
+            "update",
+            "APP-2",
+            "--project",
+            "PRJ-2",
+            "--title",
+            "Child updated",
+            "--priority",
+            "urgent",
+            "--parent",
+            "APP-1",
+        ],
+    );
+    json_output(
+        repo_a.path(),
+        &db_path,
+        &["--json", "item", "ready", "APP-2", "--project", "PRJ-2"],
+    );
+    json_output(
+        repo_a.path(),
+        &db_path,
+        &[
+            "--json",
+            "item",
+            "status",
+            "APP-2",
+            "in-progress",
+            "--project",
+            "PRJ-2",
+        ],
+    );
+    json_output(
+        repo_a.path(),
+        &db_path,
+        &[
+            "--json",
+            "item",
+            "block",
+            "APP-2",
+            "--by",
+            "APP-3",
+            "--project",
+            "PRJ-2",
+        ],
+    );
+
+    json_output(
+        repo_b.path(),
+        &db_path,
+        &["--json", "project", "use", "PRJ-2"],
+    );
+    let blocked = json_output(
+        repo_b.path(),
+        &db_path,
+        &["--json", "item", "show", "APP-2"],
+    );
+    assert_eq!(blocked["item"]["title"], "Child updated");
+    assert_eq!(blocked["item"]["priority"], "urgent");
+    assert_eq!(blocked["item"]["status"], "in_progress");
+    assert_eq!(blocked["item"]["parent_id"], "APP-1");
+    assert_eq!(blocked["blockers"][0], "APP-3");
+
+    json_output(
+        repo_a.path(),
+        &db_path,
+        &[
+            "--json",
+            "item",
+            "unblock",
+            "APP-2",
+            "--by",
+            "APP-3",
+            "--project",
+            "PRJ-2",
+        ],
+    );
+    json_output(
+        repo_a.path(),
+        &db_path,
+        &[
+            "--json",
+            "item",
+            "move",
+            "APP-2",
+            "--project",
+            "PRJ-2",
+            "--root",
+        ],
+    );
+    json_output(
+        repo_a.path(),
+        &db_path,
+        &["--json", "item", "unready", "APP-2", "--project", "PRJ-2"],
+    );
+
+    let final_item = json_output(
+        repo_b.path(),
+        &db_path,
+        &["--json", "item", "show", "APP-2"],
+    );
+    assert_eq!(final_item["item"]["parent_id"], Value::Null);
+    assert_eq!(final_item["item"]["ready"], false);
+    assert!(final_item["blocked_by"].as_array().unwrap().is_empty());
+}
+
+#[test]
 fn project_use_rejects_unknown_project() {
     let dir = setup_non_repo();
     let db_path = dir.path().join("test.sqlite3");

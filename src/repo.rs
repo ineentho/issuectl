@@ -71,6 +71,22 @@ pub fn resolve_active_project_with_override(
     resolve_active_project_readonly(conn, false, json)
 }
 
+pub fn resolve_project_tx_with_override(
+    tx: &Transaction<'_>,
+    override_project_id: Option<&str>,
+    create_if_missing: bool,
+    json: bool,
+) -> CliResult<ProjectRow> {
+    if let Some(project_id) = override_project_id {
+        return find_project_by_public_id_tx(tx, project_id)?.ok_or_else(|| CliError::Validation {
+            message: format!("unknown project id: {project_id}"),
+            json,
+        });
+    }
+
+    resolve_project_tx(tx, create_if_missing)
+}
+
 pub fn resolve_project_tx(tx: &Transaction<'_>, create_if_missing: bool) -> CliResult<ProjectRow> {
     if let Some(project) = find_project_override_tx(tx)? {
         return Ok(project);

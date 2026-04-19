@@ -67,40 +67,17 @@ pub struct ItemArgs {
 pub enum ItemCommand {
     Create(ItemCreateArgs),
     List(ItemListArgs),
-    Show {
-        item_id: String,
-    },
+    Show { item_id: String },
     Update(ItemUpdateArgs),
-    Status {
-        item_id: String,
-        status: StatusArg,
-    },
-    Ready {
-        item_id: String,
-    },
-    Unready {
-        item_id: String,
-    },
-    Block {
-        item_id: String,
-        #[arg(long = "by")]
-        blocker_id: String,
-    },
-    Unblock {
-        item_id: String,
-        #[arg(long = "by")]
-        blocker_id: String,
-    },
-    Blockers {
-        item_id: String,
-    },
+    Status(ItemStatusArgs),
+    Ready(ItemReadyArgs),
+    Unready(ItemReadyArgs),
+    Block(ItemBlockArgs),
+    Unblock(ItemBlockArgs),
+    Blockers { item_id: String },
     Move(ItemMoveArgs),
-    Children {
-        item_id: String,
-    },
-    Tree {
-        item_id: Option<String>,
-    },
+    Children { item_id: String },
+    Tree { item_id: Option<String> },
 }
 
 #[derive(Args, Debug)]
@@ -113,6 +90,8 @@ pub struct ItemCreateArgs {
     pub priority: PriorityArg,
     #[arg(long)]
     pub parent: Option<String>,
+    #[arg(long)]
+    pub project: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -148,6 +127,8 @@ pub struct ItemUpdateArgs {
     pub parent: Option<String>,
     #[arg(long)]
     pub root: bool,
+    #[arg(long)]
+    pub project: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -157,6 +138,32 @@ pub struct ItemMoveArgs {
     pub parent: Option<String>,
     #[arg(long)]
     pub root: bool,
+    #[arg(long)]
+    pub project: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct ItemStatusArgs {
+    pub item_id: String,
+    pub status: StatusArg,
+    #[arg(long)]
+    pub project: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct ItemReadyArgs {
+    pub item_id: String,
+    #[arg(long)]
+    pub project: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct ItemBlockArgs {
+    pub item_id: String,
+    #[arg(long = "by")]
+    pub blocker_id: String,
+    #[arg(long)]
+    pub project: Option<String>,
 }
 
 #[derive(Args, Debug)]

@@ -133,3 +133,119 @@ fn release_lock(tx: &Transaction<'_>, owner_id: &str) -> Result<()> {
     )?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use rusqlite::{Connection, params};
+
+    use super::*;
+    use crate::error::validation;
+
+    #[test]
+    fn initialize_database_is_idempotent_and_creates_schema() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("db.sqlite3");
+
+        initialize_database(&db_path).unwrap();
+        initialize_database(&db_path).unwrap();
+
+        let conn = open_connection(&db_path).unwrap();
+        let tables: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('projects', 'work_items', 'commands', 'events', 'locks')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(tables, 5);
+    }
+
+    #[test]
+    fn initialize_database_applies_migration_to_partial_database() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("db.sqlite3");
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS schema_migrations (
+                version TEXT PRIMARY KEY,
+                applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );",
+        )
+        .unwrap();
+        drop(conn);
+
+        initialize_database(&db_path).unwrap();
+        let conn = open_connection(&db_path).unwrap();
+        let has_work_items: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='work_items'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(has_work_items, 1);
+    }
+
+    #[test]
+    fn with_write_rejects_existing_live_lock() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("db.sqlite3");
+        initialize_database(&db_path).unwrap();
+
+        let conn = open_connection(&db_path).unwrap();
+        conn.execute(
+            "INSERT INTO locks (lock_name, owner_id, leased_until, heartbeat_at) VALUES (?1, ?2, ?3, ?4)",
+            params![WRITE_LOCK_NAME, "someone-else", lease_until(), now_string()],
+        )
+        .unwrap();
+        drop(conn);
+
+        let mut conn = open_connection(&db_path).unwrap();
+        let err = with_write(&mut conn, "me", |_tx| Ok(())).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("writer currently holds the issuecli lease")
+        );
+    }
+
+    #[test]
+    fn with_write_rolls_back_error_and_releases_lock() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("db.sqlite3");
+        initialize_database(&db_path).unwrap();
+
+        let mut conn = open_connection(&db_path).unwrap();
+        let err = with_write(&mut conn, "writer-1", |tx| {
+            tx.execute("INSERT INTO metadata (key, value) VALUES ('temp', '1')", [])
+                .unwrap();
+            validation::<()>("fail")
+        })
+        .unwrap_err();
+        assert_eq!(err.to_string(), "fail");
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM metadata WHERE key='temp'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0);
+
+        with_write(&mut conn, "writer-2", |tx| {
+            tx.execute("INSERT INTO metadata (key, value) VALUES ('temp', '2')", [])
+                .unwrap();
+            Ok(())
+        })
+        .unwrap();
+
+        let count_after: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM metadata WHERE key='temp'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count_after, 1);
+    }
+}

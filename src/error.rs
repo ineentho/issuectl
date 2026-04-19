@@ -83,3 +83,40 @@ pub fn validation<T>(message: &str) -> CliResult<T> {
         json: false,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn error_codes_and_exit_codes_match_contract() {
+        let usage = CliError::Usage {
+            message: "bad usage".to_string(),
+            json: true,
+        };
+        let validation = CliError::Validation {
+            message: "bad data".to_string(),
+            json: false,
+        };
+        let empty = CliError::EmptyResult {
+            message: "none".to_string(),
+            json: true,
+        };
+        let operational = CliError::Operational(anyhow::anyhow!("boom"));
+
+        assert_eq!(usage.code(), "usage_error");
+        assert_eq!(validation.code(), "validation_error");
+        assert_eq!(empty.code(), "empty_result");
+        assert_eq!(operational.code(), "operational_error");
+
+        assert!(usage.json_mode());
+        assert!(!validation.json_mode());
+        assert!(empty.json_mode());
+        assert!(!operational.json_mode());
+
+        assert_eq!(exit_code(&usage), 2);
+        assert_eq!(exit_code(&validation), 1);
+        assert_eq!(exit_code(&empty), EMPTY_RESULT_EXIT_CODE);
+        assert_eq!(exit_code(&operational), 1);
+    }
+}

@@ -214,3 +214,71 @@ pub fn join_item_ids(items: &[WorkItemRecord]) -> String {
             .join(",")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    fn sample_item() -> WorkItemRecord {
+        WorkItemRecord {
+            public_id: "WI-1".to_string(),
+            project_id: 7,
+            title: "Task".to_string(),
+            description: "Desc".to_string(),
+            ready: true,
+            status: "todo".to_string(),
+            priority: "high".to_string(),
+            parent_id: None,
+            created_at: "1.0Z".to_string(),
+            updated_at: "1.0Z".to_string(),
+            closed_at: None,
+            version: 1,
+        }
+    }
+
+    #[test]
+    fn status_and_priority_parse_and_display() {
+        assert_eq!(StatusArg::Todo.to_string(), "todo");
+        assert_eq!(StatusArg::InProgress.to_string(), "in_progress");
+        assert!(StatusArg::Done.is_terminal());
+        assert!(StatusArg::Cancelled.is_terminal());
+        assert!(!StatusArg::Todo.is_terminal());
+        assert!("done".parse::<StatusArg>().is_ok());
+        assert!("bogus".parse::<StatusArg>().is_err());
+
+        assert_eq!(PriorityArg::Urgent.to_string(), "urgent");
+        assert!("high".parse::<PriorityArg>().is_ok());
+        assert!("bogus".parse::<PriorityArg>().is_err());
+    }
+
+    #[test]
+    fn helper_functions_build_expected_values() {
+        assert_eq!(bool_to_i64(true), 1);
+        assert_eq!(bool_to_i64(false), 0);
+        assert_eq!(work_item_event_key(3, "WI-2"), "3:WI-2");
+        assert_eq!(
+            blocker_relation_event_key(3, "WI-1", "WI-2"),
+            "3:WI-1->WI-2"
+        );
+        assert_eq!(join_ids(&[]), "-");
+        assert_eq!(join_ids(&["A".to_string(), "B".to_string()]), "A,B");
+        assert_eq!(join_item_ids(&[]), "-");
+        assert_eq!(join_item_ids(&[sample_item()]), "WI-1");
+    }
+
+    #[test]
+    fn json_helpers_round_trip_work_item() {
+        let item = sample_item();
+        let state = work_item_state(&item);
+        assert_eq!(state["public_id"], "WI-1");
+        assert_eq!(parse_json("{\"ok\":true}").unwrap()["ok"], true);
+        assert!(parse_json("not-json").is_none());
+
+        let rebuilt = work_item_from_value(&state).unwrap();
+        assert_eq!(rebuilt.public_id, item.public_id);
+        assert_eq!(rebuilt.project_id, item.project_id);
+        assert!(work_item_from_value(&json!({"bad": true})).is_err());
+    }
+}

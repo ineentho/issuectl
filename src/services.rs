@@ -480,6 +480,9 @@ impl IssueService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::path::Path;
+
     use tempfile::tempdir;
 
     fn setup_service() -> (tempfile::TempDir, IssueService) {
@@ -496,6 +499,77 @@ mod tests {
         .unwrap();
 
         (temp, service)
+    }
+
+    fn create_project(service: &IssueService, repo_root: &Path) -> ProjectRecord {
+        fs::create_dir_all(repo_root).unwrap();
+        let mut conn = open_connection(&service.db_path).unwrap();
+        with_write(&mut conn, &owner_id(), |tx| {
+            let project = get_or_create_project(tx, repo_root, true)?;
+            set_project_override(tx, &project.public_id)
+        })
+        .unwrap()
+    }
+
+    fn latest_command_id(service: &IssueService) -> String {
+        service
+            .load_overview(None)
+            .unwrap()
+            .commands
+            .into_iter()
+            .next()
+            .expect("command")
+            .public_id
+    }
+
+    fn current_project(service: &IssueService) -> ProjectRecord {
+        service
+            .load_overview(None)
+            .unwrap()
+            .active_project
+            .expect("active project")
+    }
+
+    fn seed_item_in_project(
+        service: &IssueService,
+        project: &ProjectRecord,
+        title: &str,
+    ) -> WorkItemRecord {
+        let mut conn = open_connection(&service.db_path).unwrap();
+        with_write(&mut conn, &owner_id(), |tx| {
+            let project_id: i64 = tx
+                .query_row(
+                    "SELECT id FROM projects WHERE public_id = ?1",
+                    rusqlite::params![project.public_id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            let number = allocate_project_item_number(tx, project_id).unwrap();
+            let public_id = format!("WI-{number}");
+            let now = now_string();
+            let item = WorkItemRecord {
+                public_id: public_id.clone(),
+                project_id,
+                title: title.to_string(),
+                description: "seeded".to_string(),
+                ready: false,
+                status: StatusArg::Todo.to_string(),
+                priority: PriorityArg::Medium.to_string(),
+                parent_id: None,
+                created_at: now.clone(),
+                updated_at: now,
+                closed_at: None,
+                version: 1,
+            };
+            tx.execute(
+                "INSERT INTO work_items (public_id, project_id, title, description, ready, status, priority, parent_id, created_at, updated_at, closed_at, version)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, ?8, ?9, ?10, ?11)",
+                rusqlite::params![item.public_id, item.project_id, item.title, item.description, bool_to_i64(item.ready), item.status, item.priority, item.created_at, item.updated_at, item.closed_at, item.version],
+            )
+            .unwrap();
+            Ok(item)
+        })
+        .unwrap()
     }
 
     #[test]
@@ -522,17 +596,176 @@ mod tests {
 
         assert_eq!(updated.priority, "urgent");
 
-        let active_project = service
-            .load_overview(None)
-            .unwrap()
-            .active_project
-            .expect("active project");
-
+        let project = current_project(&service);
         let detail = service
-            .item_detail(&active_project.public_id, &created.public_id)
+            .item_detail(&project.public_id, &created.public_id)
             .unwrap();
         assert_eq!(detail.item.title, "Updated");
         assert_eq!(detail.item.description, "Updated from test");
         assert_eq!(detail.item.priority, "urgent");
+    }
+
+    #[test]
+    fn overview_and_project_switching_are_project_scoped() {
+        let (temp, service) = setup_service();
+        let first_item = service
+            .create_item(CreateItemInput {
+                title: "First project item".to_string(),
+                description: "one".to_string(),
+                priority: PriorityArg::Medium,
+                parent: None,
+            })
+            .unwrap();
+        let first_project = current_project(&service);
+
+        let second_project = create_project(&service, &temp.path().join("second-project"));
+        let second_item = seed_item_in_project(&service, &second_project, "Second project item");
+
+        let current_overview = service.load_overview(None).unwrap();
+        assert_eq!(
+            current_overview.active_project.unwrap().public_id,
+            first_project.public_id
+        );
+        assert_eq!(current_overview.items.len(), 1);
+        assert_eq!(current_overview.items[0].public_id, first_item.public_id);
+
+        let used_project = service.use_project(&second_project.public_id).unwrap();
+        assert_eq!(used_project.public_id, second_project.public_id);
+
+        let first_overview = service
+            .load_overview(Some(&first_project.public_id))
+            .unwrap();
+        assert_eq!(
+            first_overview.active_project.unwrap().public_id,
+            first_project.public_id
+        );
+        assert_eq!(first_overview.items.len(), 1);
+        assert_eq!(first_overview.items[0].public_id, first_item.public_id);
+
+        let explicit_second = service
+            .load_overview(Some(&second_project.public_id))
+            .unwrap();
+        assert_eq!(
+            explicit_second.active_project.unwrap().public_id,
+            second_project.public_id
+        );
+        assert_eq!(explicit_second.items.len(), 1);
+        assert_eq!(explicit_second.items[0].public_id, second_item.public_id);
+    }
+
+    #[test]
+    fn service_item_workflows_cover_detail_updates_and_undo() {
+        let (_temp, service) = setup_service();
+
+        let parent = service
+            .create_item(CreateItemInput {
+                title: "Parent".to_string(),
+                description: "parent item".to_string(),
+                priority: PriorityArg::High,
+                parent: None,
+            })
+            .unwrap();
+        let child = service
+            .create_item(CreateItemInput {
+                title: "Child".to_string(),
+                description: "child item".to_string(),
+                priority: PriorityArg::Low,
+                parent: Some(parent.public_id.clone()),
+            })
+            .unwrap();
+        let project = current_project(&service);
+
+        let parent_detail = service
+            .item_detail(&project.public_id, &parent.public_id)
+            .unwrap();
+        assert_eq!(parent_detail.children.len(), 1);
+        assert_eq!(parent_detail.children[0].public_id, child.public_id);
+
+        let updated_child = service
+            .update_item(UpdateItemInput {
+                item_id: child.public_id.clone(),
+                title: "Updated child".to_string(),
+                description: "updated description".to_string(),
+                priority: PriorityArg::Urgent,
+            })
+            .unwrap();
+        assert_eq!(updated_child.priority, "urgent");
+
+        let ready_child = service.set_ready(&child.public_id, true).unwrap();
+        assert!(ready_child.ready);
+        let unready_child = service.set_ready(&child.public_id, false).unwrap();
+        assert!(!unready_child.ready);
+
+        let in_progress_child = service
+            .set_status(&child.public_id, StatusArg::InProgress)
+            .unwrap();
+        assert_eq!(in_progress_child.status, "in_progress");
+        let done_child = service
+            .set_status(&child.public_id, StatusArg::Done)
+            .unwrap();
+        assert_eq!(done_child.status, "done");
+        assert!(done_child.closed_at.is_some());
+
+        let undone_command_id = latest_command_id(&service);
+        let undo_result = service.undo(&undone_command_id).unwrap();
+        assert_eq!(undo_result["reversed_command"], undone_command_id);
+        let reopened_child = service
+            .item_detail(&project.public_id, &child.public_id)
+            .unwrap();
+        assert_eq!(reopened_child.item.status, "in_progress");
+        assert_eq!(reopened_child.item.closed_at, None);
+
+        let moved_child = service.move_item(&child.public_id, None).unwrap();
+        assert_eq!(moved_child.parent_id, None);
+        let moved_detail = service
+            .item_detail(&project.public_id, &child.public_id)
+            .unwrap();
+        assert_eq!(moved_detail.item.title, "Updated child");
+        assert_eq!(moved_detail.item.description, "updated description");
+        assert_eq!(moved_detail.item.priority, "urgent");
+
+        let parent_after_move = service
+            .item_detail(&project.public_id, &parent.public_id)
+            .unwrap();
+        assert!(parent_after_move.children.is_empty());
+
+        service
+            .set_block_relation(&child.public_id, &parent.public_id, true)
+            .unwrap();
+        let blocked_detail = service
+            .item_detail(&project.public_id, &child.public_id)
+            .unwrap();
+        assert_eq!(blocked_detail.blockers, vec![parent.public_id.clone()]);
+
+        service
+            .set_block_relation(&child.public_id, &parent.public_id, false)
+            .unwrap();
+        let unblocked_detail = service
+            .item_detail(&project.public_id, &child.public_id)
+            .unwrap();
+        assert!(unblocked_detail.blockers.is_empty());
+    }
+
+    #[test]
+    fn validation_errors_are_returned_for_invalid_service_requests() {
+        let (_temp, service) = setup_service();
+        let item = service
+            .create_item(CreateItemInput {
+                title: "Task".to_string(),
+                description: String::new(),
+                priority: PriorityArg::Medium,
+                parent: None,
+            })
+            .unwrap();
+
+        let err = service
+            .set_block_relation(&item.public_id, &item.public_id, true)
+            .unwrap_err();
+        match err {
+            CliError::Validation { message, .. } => {
+                assert!(message.contains("cannot block itself"));
+            }
+            other => panic!("expected validation error, got {other:?}"),
+        }
     }
 }

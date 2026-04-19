@@ -44,10 +44,16 @@ pub struct ProjectArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum ProjectCommand {
-    Show,
+    Show(ProjectShowArgs),
     List,
     Use { project_id: String },
     Update(ProjectUpdateArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct ProjectShowArgs {
+    #[arg(long)]
+    pub explain: bool,
 }
 
 #[derive(Args, Debug)]

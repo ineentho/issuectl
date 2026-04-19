@@ -125,6 +125,15 @@ fn init_project_show_and_project_list_work() {
     let show = json_output(repo.path(), &db_path, &["--json", "project", "show"]);
     assert_eq!(show["project"]["public_id"], "PRJ-1");
 
+    let explained = json_output(
+        repo.path(),
+        &db_path,
+        &["--json", "project", "show", "--explain"],
+    );
+    assert_eq!(explained["project"]["public_id"], "PRJ-1");
+    assert_eq!(explained["resolution"]["source"], "repo_root");
+    assert_eq!(explained["resolution"]["created"], false);
+
     let list = json_output(repo.path(), &db_path, &["--json", "project", "list"]);
     assert_eq!(list["projects"].as_array().unwrap().len(), 1);
     assert_eq!(list["projects"][0]["public_id"], "PRJ-1");
@@ -169,6 +178,15 @@ fn project_use_override_wins_over_repo_context_for_reads_and_writes() {
 
     let show = json_output(repo_a.path(), &db_path, &["--json", "project", "show"]);
     assert_eq!(show["project"]["public_id"], "PRJ-2");
+
+    let explained = json_output(
+        repo_a.path(),
+        &db_path,
+        &["--json", "project", "show", "--explain"],
+    );
+    assert_eq!(explained["project"]["public_id"], "PRJ-2");
+    assert_eq!(explained["resolution"]["source"], "project_override");
+    assert_eq!(explained["resolution"]["override_project_id"], "PRJ-2");
 
     let created = json_output(
         repo_a.path(),

@@ -3,6 +3,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::db::{now_string, open_connection, owner_id, resolve_db_path, with_write};
@@ -14,12 +15,21 @@ use crate::domain::{
 use crate::error::{CliError, CliResult, validation};
 use crate::git::find_repo_root;
 
+#[derive(Debug, Clone, Serialize)]
+pub struct ProjectResolution {
+    pub project: ProjectRecord,
+    pub source: &'static str,
+    pub repo_root: Option<String>,
+    pub override_project_id: Option<String>,
+    pub created: bool,
+}
+
 pub fn resolve_active_project(
     conn: &mut Connection,
     create_if_missing: bool,
     json: bool,
 ) -> CliResult<ProjectRecord> {
-    Ok(resolve_active_project_readonly(conn, create_if_missing, json)?.record)
+    Ok(resolve_active_project_resolution(conn, create_if_missing, json)?.project)
 }
 
 pub fn resolve_active_project_readonly(
@@ -27,26 +37,52 @@ pub fn resolve_active_project_readonly(
     create_if_missing: bool,
     json: bool,
 ) -> CliResult<ProjectRow> {
+    let resolution = resolve_active_project_resolution(conn, create_if_missing, json)?;
+    find_project_by_public_id(conn, &resolution.project.public_id)?
+        .context("failed to resolve project")
+        .map_err(CliError::Operational)
+}
+
+pub fn resolve_active_project_resolution(
+    conn: &Connection,
+    create_if_missing: bool,
+    json: bool,
+) -> CliResult<ProjectResolution> {
+    let repo_root = find_repo_root().map(|path| path.to_string_lossy().to_string());
+
     if let Some(project) = find_project_override(conn)? {
-        return Ok(project);
+        return Ok(ProjectResolution {
+            override_project_id: Some(project.record.public_id.clone()),
+            repo_root,
+            source: "project_override",
+            created: false,
+            project: project.record,
+        });
     }
 
-    if let Some(repo_root) = find_repo_root() {
-        let repo_root_string = repo_root.to_string_lossy().to_string();
-        if let Some(project) = find_project_by_repo_root(conn, &repo_root_string)? {
-            return Ok(project);
+    if let Some(repo_root_string) = &repo_root {
+        if let Some(project) = find_project_by_repo_root(conn, repo_root_string)? {
+            return Ok(ProjectResolution {
+                override_project_id: None,
+                repo_root,
+                source: "repo_root",
+                created: false,
+                project: project.record,
+            });
         }
         if create_if_missing {
             let mut conn = open_connection(&resolve_db_path()?)?;
             let owner = owner_id();
             let record = with_write(&mut conn, &owner, |tx| {
-                get_or_create_project(tx, &repo_root, true)
+                get_or_create_project(tx, Path::new(repo_root_string), true)
             })?;
-            return Ok(find_project_by_public_id(
-                &open_connection(&resolve_db_path()?)?,
-                &record.public_id,
-            )?
-            .context("failed to resolve project")?);
+            return Ok(ProjectResolution {
+                override_project_id: None,
+                repo_root,
+                source: "repo_root",
+                created: true,
+                project: record,
+            });
         }
     }
 

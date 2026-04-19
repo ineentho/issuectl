@@ -181,6 +181,12 @@ fn human_outputs_include_expected_text() {
         &["item", "create", "--title", "Task"],
     );
     assert!(stdout_string(&create).contains("Created item: WI-1 Task"));
+    assert!(stdout_string(&create).contains("project=PRJ-1"));
+
+    let explained = success_output(repo.path(), &db_path, &["project", "show", "--explain"]);
+    let explained_stdout = stdout_string(&explained);
+    assert!(explained_stdout.contains("resolved_by=repo_root"));
+    assert!(explained_stdout.contains("created=false"));
 
     let show = success_output(repo.path(), &db_path, &["item", "show", "WI-1"]);
     let show_stdout = stdout_string(&show);

@@ -3,6 +3,7 @@ use serde_json::{Value, json};
 
 use crate::domain::{ProjectRecord, TreeNode, WorkItemRecord};
 use crate::error::CliResult;
+use crate::repo::ProjectResolution;
 
 pub fn emit_project(json_output: bool, label: &str, project: &ProjectRecord) -> CliResult<()> {
     if json_output {
@@ -17,6 +18,35 @@ pub fn emit_project(json_output: bool, label: &str, project: &ProjectRecord) -> 
     }
 }
 
+pub fn emit_project_resolution(
+    json_output: bool,
+    label: &str,
+    resolution: &ProjectResolution,
+) -> CliResult<()> {
+    if json_output {
+        emit_value(
+            true,
+            &json!({ "project": resolution.project, "resolution": {
+                "source": resolution.source,
+                "repo_root": resolution.repo_root,
+                "override_project_id": resolution.override_project_id,
+                "created": resolution.created,
+            }}),
+        )
+    } else {
+        emit_project(false, label, &resolution.project)?;
+        println!("resolved_by={}", resolution.source);
+        println!("created={}", resolution.created);
+        if let Some(project_id) = &resolution.override_project_id {
+            println!("override_project_id={project_id}");
+        }
+        if let Some(repo_root) = &resolution.repo_root {
+            println!("resolution_repo_root={repo_root}");
+        }
+        Ok(())
+    }
+}
+
 pub fn emit_item(json_output: bool, label: &str, item: &WorkItemRecord) -> CliResult<()> {
     if json_output {
         emit_value(true, &json!({ "item": item }))
@@ -26,6 +56,21 @@ pub fn emit_item(json_output: bool, label: &str, item: &WorkItemRecord) -> CliRe
             "status={} priority={} ready={}",
             item.status, item.priority, item.ready
         );
+        Ok(())
+    }
+}
+
+pub fn emit_item_for_project(
+    json_output: bool,
+    label: &str,
+    project: &ProjectRecord,
+    item: &WorkItemRecord,
+) -> CliResult<()> {
+    if json_output {
+        emit_value(true, &json!({ "project": project, "item": item }))
+    } else {
+        emit_item(false, label, item)?;
+        println!("project={}", project.public_id);
         Ok(())
     }
 }

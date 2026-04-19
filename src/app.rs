@@ -18,15 +18,16 @@ use crate::domain::{
 };
 use crate::error::{CliError, CliResult};
 use crate::git::require_repo_root;
-use crate::output::{emit_item, emit_project, emit_value, render_tree};
+use crate::output::{emit_project, emit_value, render_tree};
 use crate::repo::{
     allocate_project_item_number, build_tree, create_command, ensure_no_block_cycle,
     ensure_valid_parent, get_command_history, get_item_by_public_id,
     get_item_by_public_id_readonly, get_or_create_project, insert_event, list_blocked_by,
     list_blockers, list_children, list_commands, list_item_history, list_items, list_projects,
     list_root_items, resolve_active_item, resolve_active_project, resolve_active_project_readonly,
-    resolve_active_project_with_override, resolve_parent_row_id, resolve_project_tx_with_override,
-    select_next_items, set_project_override, undo_command, update_project_prefix,
+    resolve_active_project_resolution, resolve_active_project_with_override, resolve_parent_row_id,
+    resolve_project_tx_with_override, select_next_items, set_project_override, undo_command,
+    update_project_prefix,
 };
 
 pub struct App {
@@ -84,10 +85,20 @@ impl App {
 
     fn project_command(&self, command: ProjectCommand) -> CliResult<()> {
         match command {
-            ProjectCommand::Show => {
+            ProjectCommand::Show(args) => {
                 let mut conn = open_connection(&self.db_path)?;
-                let project = resolve_active_project(&mut conn, true, self.json_output)?;
-                emit_project(self.json_output, "Active project", &project)
+                if args.explain {
+                    let resolution =
+                        resolve_active_project_resolution(&conn, true, self.json_output)?;
+                    crate::output::emit_project_resolution(
+                        self.json_output,
+                        "Active project",
+                        &resolution,
+                    )
+                } else {
+                    let project = resolve_active_project(&mut conn, true, self.json_output)?;
+                    emit_project(self.json_output, "Active project", &project)
+                }
             }
             ProjectCommand::List => {
                 let conn = open_connection(&self.db_path)?;
@@ -165,7 +176,7 @@ impl App {
     fn item_create(&self, args: ItemCreateArgs) -> CliResult<()> {
         let mut conn = open_connection(&self.db_path)?;
         let owner = owner_id();
-        let item = with_write(&mut conn, &owner, |tx| {
+        let (project, item) = with_write(&mut conn, &owner, |tx| {
             let project = resolve_project_tx_with_override(
                 tx,
                 args.project.as_deref(),
@@ -214,10 +225,10 @@ impl App {
                 None,
                 Some(work_item_state(&persisted.record)),
             )?;
-            Ok(persisted.record)
+            Ok((project.record, persisted.record))
         })?;
 
-        emit_item(self.json_output, "Created item", &item)
+        crate::output::emit_item_for_project(self.json_output, "Created item", &project, &item)
     }
 
     fn item_list(&self, args: ItemListArgs) -> CliResult<()> {
@@ -291,7 +302,7 @@ impl App {
 
         let mut conn = open_connection(&self.db_path)?;
         let owner = owner_id();
-        let updated = with_write(&mut conn, &owner, |tx| {
+        let (project, updated) = with_write(&mut conn, &owner, |tx| {
             let project = resolve_project_tx_with_override(
                 tx,
                 args.project.as_deref(),
@@ -348,10 +359,10 @@ impl App {
                 Some(before),
                 Some(work_item_state(&persisted.record)),
             )?;
-            Ok(persisted.record)
+            Ok((project.record, persisted.record))
         })?;
 
-        emit_item(self.json_output, "Updated item", &updated)
+        crate::output::emit_item_for_project(self.json_output, "Updated item", &project, &updated)
     }
 
     fn item_status(&self, args: ItemStatusArgs) -> CliResult<()> {
@@ -370,7 +381,7 @@ impl App {
     fn item_ready_state(&self, args: ItemReadyArgs, ready: bool) -> CliResult<()> {
         let mut conn = open_connection(&self.db_path)?;
         let owner = owner_id();
-        let updated = with_write(&mut conn, &owner, |tx| {
+        let (project, updated) = with_write(&mut conn, &owner, |tx| {
             let project = resolve_project_tx_with_override(
                 tx,
                 args.project.as_deref(),
@@ -411,16 +422,17 @@ impl App {
                 Some(before),
                 Some(work_item_state(&persisted.record)),
             )?;
-            Ok(persisted.record)
+            Ok((project.record, persisted.record))
         })?;
 
-        emit_item(
+        crate::output::emit_item_for_project(
             self.json_output,
             if ready {
                 "Marked ready"
             } else {
                 "Marked unready"
             },
+            &project,
             &updated,
         )
     }

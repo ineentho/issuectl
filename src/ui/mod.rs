@@ -2,10 +2,12 @@ mod input;
 
 use anyhow::Result;
 use gpui::{
-    App, Application, Bounds, Context, Entity, FocusHandle, Focusable, KeyBinding, SharedString,
-    Window, WindowBounds, WindowOptions, div, prelude::*, px, rgb, size,
+    App, Application, AsyncApp, Bounds, Context, Entity, FocusHandle, Focusable, KeyBinding,
+    SharedString, Subscription, WeakEntity, Window, WindowBounds, WindowOptions, div, prelude::*,
+    px, rgb, size,
 };
 use std::collections::HashSet;
+use std::time::Duration;
 
 use crate::domain::{CommandRecord, EventRecord, PriorityArg, StatusArg, TreeNode};
 use crate::services::{
@@ -36,7 +38,11 @@ pub fn run_ui() -> Result<()> {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 ..Default::default()
             },
-            move |_, cx| cx.new(|cx| IssueUi::new(service.clone(), cx)),
+            move |window, cx| {
+                let ui = cx.new(|cx| IssueUi::new(service.clone(), cx));
+                ui.update(cx, |this, cx| this.install_watchers(window, cx));
+                ui
+            },
         )
         .expect("window");
         cx.activate(true);
@@ -60,6 +66,7 @@ struct IssueUi {
     item_detail: Option<ItemDetail>,
     command_detail: Option<(CommandRecord, Vec<EventRecord>)>,
     flash: Option<FlashMessage>,
+    subscriptions: Vec<Subscription>,
     create_priority: PriorityArg,
     edit_priority: PriorityArg,
     create_title: Entity<TextInput>,
@@ -73,6 +80,8 @@ struct IssueUi {
 }
 
 impl IssueUi {
+    const AUTO_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
+
     fn new(service: IssueService, cx: &mut Context<Self>) -> Self {
         let create_title = cx.new(|cx| TextInput::new(cx, "New item title"));
         let create_description = cx.new(|cx| TextInput::new(cx, "Description"));
@@ -92,6 +101,7 @@ impl IssueUi {
             item_detail: None,
             command_detail: None,
             flash: None,
+            subscriptions: Vec::new(),
             create_priority: PriorityArg::Medium,
             edit_priority: PriorityArg::Medium,
             create_title,
@@ -107,7 +117,43 @@ impl IssueUi {
         this
     }
 
+    fn install_watchers(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.subscriptions
+            .push(cx.observe_window_activation(window, |this, window, cx| {
+                if window.is_window_active() {
+                    this.refresh_preserving_inputs(cx);
+                }
+            }));
+
+        cx.spawn(|this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let mut async_cx = cx.clone();
+            async move {
+                loop {
+                    async_cx
+                        .background_executor()
+                        .timer(Self::AUTO_REFRESH_INTERVAL)
+                        .await;
+                    if this
+                        .update(&mut async_cx, |this, cx| this.refresh_preserving_inputs(cx))
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            }
+        })
+        .detach();
+    }
+
     fn refresh(&mut self, cx: &mut Context<Self>) {
+        self.refresh_internal(cx, false);
+    }
+
+    fn refresh_preserving_inputs(&mut self, cx: &mut Context<Self>) {
+        self.refresh_internal(cx, true);
+    }
+
+    fn refresh_internal(&mut self, cx: &mut Context<Self>, preserve_selected_inputs: bool) {
         match self
             .service
             .load_overview(self.selected_project_id.as_deref())
@@ -130,8 +176,10 @@ impl IssueUi {
                 ) {
                     match self.service.item_detail(project_id, item_id) {
                         Ok(detail) => {
-                            self.sync_edit_inputs(&detail, cx);
-                            self.sync_selected_priority(&detail, cx);
+                            if !(preserve_selected_inputs && self.has_unsaved_selected_edits(cx)) {
+                                self.sync_edit_inputs(&detail, cx);
+                                self.sync_selected_priority(&detail, cx);
+                            }
                             self.item_detail = Some(detail);
                         }
                         Err(_) => {
@@ -156,6 +204,19 @@ impl IssueUi {
             }
         }
         cx.notify();
+    }
+
+    fn has_unsaved_selected_edits(&self, cx: &App) -> bool {
+        let Some(detail) = &self.item_detail else {
+            return false;
+        };
+
+        Self::read_input(&self.edit_title, cx) != detail.item.title
+            || Self::read_input(&self.edit_description, cx) != detail.item.description
+            || Self::read_input(&self.move_parent, cx)
+                != detail.item.parent_id.clone().unwrap_or_default()
+            || Self::read_input(&self.block_target, cx) != detail.item.public_id
+            || self.edit_priority.to_string() != detail.item.priority
     }
 
     fn sync_edit_inputs(&self, detail: &ItemDetail, cx: &mut Context<Self>) {

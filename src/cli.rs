@@ -3,7 +3,7 @@ use clap::{Args, Parser, Subcommand};
 use crate::domain::{PriorityArg, StatusArg};
 
 #[derive(Parser, Debug)]
-#[command(name = "issuecli")]
+#[command(name = "issuectl")]
 #[command(about = "Local work-item tracking for repository workflows")]
 pub struct Cli {
     #[arg(long, global = true)]

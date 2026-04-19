@@ -17,12 +17,12 @@ const MIGRATIONS: &[(&str, &str)] = &[
 const WRITE_LOCK_NAME: &str = "global_write";
 
 pub fn resolve_db_path() -> Result<PathBuf> {
-    if let Ok(path) = std::env::var("ISSUECLI_DB_PATH") {
+    if let Ok(path) = std::env::var("ISSUECTL_DB_PATH") {
         return Ok(PathBuf::from(path));
     }
 
     let home = dirs::home_dir().context("failed to resolve home directory")?;
-    Ok(home.join(".issuecli").join("db.sqlite3"))
+    Ok(home.join(".issuectl").join("db.sqlite3"))
 }
 
 pub fn initialize_database(db_path: &Path) -> Result<()> {
@@ -126,7 +126,7 @@ fn acquire_lock(tx: &Transaction<'_>, owner_id: &str) -> CliResult<()> {
     )?;
     if updated == 0 {
         return Err(CliError::Operational(anyhow::anyhow!(
-            "another writer currently holds the issuecli lease"
+            "another writer currently holds the issuectl lease"
         )));
     }
     Ok(())
@@ -210,7 +210,7 @@ mod tests {
         let err = with_write(&mut conn, "me", |_tx| Ok(())).unwrap_err();
         assert!(
             err.to_string()
-                .contains("writer currently holds the issuecli lease")
+                .contains("writer currently holds the issuectl lease")
         );
     }
 

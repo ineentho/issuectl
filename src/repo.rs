@@ -87,7 +87,7 @@ pub fn resolve_active_project_resolution(
     }
 
     Err(CliError::Validation {
-        message: "no active project found; run issuecli init inside a Git repository or use issuecli project use <project-id>".to_string(),
+        message: "no active project found; run issuectl init inside a Git repository or use issuectl project use <project-id>".to_string(),
         json,
     })
 }
@@ -142,7 +142,7 @@ pub fn resolve_project_tx(tx: &Transaction<'_>, create_if_missing: bool) -> CliR
     }
 
     Err(CliError::Validation {
-        message: "no active project found; run issuecli init inside a Git repository or use issuecli project use <project-id>".to_string(),
+        message: "no active project found; run issuectl init inside a Git repository or use issuectl project use <project-id>".to_string(),
         json: false,
     })
 }
@@ -288,7 +288,7 @@ pub fn create_command(
     let public_id = format!("CMD-{seq}");
     let now = now_string();
     tx.execute(
-        "INSERT INTO commands (public_id, project_id, action, actor, undone_command_id, created_at) VALUES (?1, ?2, ?3, 'issuecli', ?4, ?5)",
+        "INSERT INTO commands (public_id, project_id, action, actor, undone_command_id, created_at) VALUES (?1, ?2, ?3, 'issuectl', ?4, ?5)",
         params![public_id, project_id, action, undone_command_id, now],
     )?;
     Ok(InternalCommandRecord {

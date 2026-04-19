@@ -1,3 +1,3 @@
 fn main() {
-    std::process::exit(issuecli::run_cli());
+    std::process::exit(issuectl::run_cli());
 }

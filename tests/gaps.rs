@@ -23,13 +23,13 @@ fn setup_non_repo() -> TempDir {
 }
 
 fn bin() -> assert_cmd::Command {
-    assert_cmd::Command::cargo_bin("issuecli").unwrap()
+    assert_cmd::Command::cargo_bin("issuectl").unwrap()
 }
 
 fn output(dir: &Path, db_path: &str, args: &[&str]) -> Output {
     let mut cmd = bin();
     cmd.current_dir(dir)
-        .env("ISSUECLI_DB_PATH", db_path)
+        .env("ISSUECTL_DB_PATH", db_path)
         .args(args)
         .output()
         .unwrap()
@@ -325,9 +325,9 @@ fn next_wait_blocks_until_item_becomes_ready() {
         &["item", "create", "--title", "Waiting Task"],
     );
 
-    let mut child = Command::new(assert_cmd::cargo::cargo_bin("issuecli"))
+    let mut child = Command::new(assert_cmd::cargo::cargo_bin("issuectl"))
         .current_dir(repo.path())
-        .env("ISSUECLI_DB_PATH", &db_path)
+        .env("ISSUECTL_DB_PATH", &db_path)
         .args(["--json", "next", "--wait"])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())

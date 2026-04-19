@@ -21,13 +21,13 @@ fn setup_non_repo() -> TempDir {
 }
 
 fn bin() -> assert_cmd::Command {
-    assert_cmd::Command::cargo_bin("issuecli").unwrap()
+    assert_cmd::Command::cargo_bin("issuectl").unwrap()
 }
 
 fn output(dir: &Path, db_path: &str, args: &[&str]) -> Output {
     let mut cmd = bin();
     cmd.current_dir(dir)
-        .env("ISSUECLI_DB_PATH", db_path)
+        .env("ISSUECTL_DB_PATH", db_path)
         .args(args)
         .output()
         .unwrap()

@@ -802,7 +802,7 @@ impl Render for IssueUi {
                         .flex()
                         .flex_col()
                         .gap_1()
-                        .child(div().text_2xl().child("issuecli"))
+                        .child(div().text_2xl().child("issuectl"))
                         .child(
                             div()
                                 .text_sm()

@@ -1,4 +1,4 @@
-# issuecli
+# issuectl
 
 Local-first work item tracking for repository workflows.
 
@@ -7,9 +7,9 @@ Local-first work item tracking for repository workflows.
 Run the existing CLI with subcommands like:
 
 ```bash
-issuecli init
-issuecli item create --title "Task"
-issuecli next
+issuectl init
+issuectl item create --title "Task"
+issuectl next
 ```
 
 ## UI
@@ -31,4 +31,4 @@ The UI shares the same SQLite database and current project resolution as the CLI
 ## Notes
 
 - On macOS, GPUI depends on the normal Xcode / Metal toolchain prerequisites.
-- The default database path remains `~/.issuecli/db.sqlite3` unless `ISSUECLI_DB_PATH` is set.
+- The default database path remains `~/.issuectl/db.sqlite3` unless `ISSUECTL_DB_PATH` is set.

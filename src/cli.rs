@@ -21,6 +21,7 @@ pub enum Commands {
     Next(NextArgs),
     History(HistoryArgs),
     Undo(UndoArgs),
+    Ui,
 }
 
 #[derive(Args, Debug)]

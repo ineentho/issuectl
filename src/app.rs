@@ -50,6 +50,7 @@ impl App {
             Commands::Next(args) => self.next(args),
             Commands::History(HistoryArgs { command }) => self.history_command(command),
             Commands::Undo(args) => self.undo(args),
+            Commands::Ui => unreachable!("ui is handled before CLI dispatch"),
         }
     }
 

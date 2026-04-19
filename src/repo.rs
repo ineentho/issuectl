@@ -27,6 +27,10 @@ pub fn resolve_active_project_readonly(
     create_if_missing: bool,
     json: bool,
 ) -> CliResult<ProjectRow> {
+    if let Some(project) = find_project_override(conn)? {
+        return Ok(project);
+    }
+
     if let Some(repo_root) = find_repo_root() {
         let repo_root_string = repo_root.to_string_lossy().to_string();
         if let Some(project) = find_project_by_repo_root(conn, &repo_root_string)? {
@@ -44,10 +48,6 @@ pub fn resolve_active_project_readonly(
             )?
             .context("failed to resolve project")?);
         }
-    }
-
-    if let Some(project) = find_project_override(conn)? {
-        return Ok(project);
     }
 
     Err(CliError::Validation {
@@ -72,6 +72,10 @@ pub fn resolve_active_project_with_override(
 }
 
 pub fn resolve_project_tx(tx: &Transaction<'_>, create_if_missing: bool) -> CliResult<ProjectRow> {
+    if let Some(project) = find_project_override_tx(tx)? {
+        return Ok(project);
+    }
+
     if let Some(repo_root) = find_repo_root() {
         let repo_root_string = repo_root.to_string_lossy().to_string();
         if let Some(project) = find_project_by_repo_root_tx(tx, &repo_root_string)? {
@@ -83,10 +87,6 @@ pub fn resolve_project_tx(tx: &Transaction<'_>, create_if_missing: bool) -> CliR
                 .context("failed to resolve created project")
                 .map_err(CliError::Operational);
         }
-    }
-
-    if let Some(project) = find_project_override_tx(tx)? {
-        return Ok(project);
     }
 
     Err(CliError::Validation {

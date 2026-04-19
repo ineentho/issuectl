@@ -624,13 +624,24 @@ mod tests {
         let current_overview = service.load_overview(None).unwrap();
         assert_eq!(
             current_overview.active_project.unwrap().public_id,
-            first_project.public_id
+            second_project.public_id
         );
         assert_eq!(current_overview.items.len(), 1);
-        assert_eq!(current_overview.items[0].public_id, first_item.public_id);
+        assert_eq!(current_overview.items[0].public_id, second_item.public_id);
 
         let used_project = service.use_project(&second_project.public_id).unwrap();
         assert_eq!(used_project.public_id, second_project.public_id);
+
+        let overridden_overview = service.load_overview(None).unwrap();
+        assert_eq!(
+            overridden_overview.active_project.unwrap().public_id,
+            second_project.public_id
+        );
+        assert_eq!(overridden_overview.items.len(), 1);
+        assert_eq!(
+            overridden_overview.items[0].public_id,
+            second_item.public_id
+        );
 
         let first_overview = service
             .load_overview(Some(&first_project.public_id))

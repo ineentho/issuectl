@@ -148,6 +148,46 @@ fn project_use_allows_non_repo_context_after_init() {
 }
 
 #[test]
+fn project_use_override_wins_over_repo_context_for_reads_and_writes() {
+    let (repo_a, db_path) = setup_repo();
+    let (repo_b, _) = setup_repo();
+
+    json_output(repo_a.path(), &db_path, &["--json", "init"]);
+    let init_b = json_output(repo_b.path(), &db_path, &["--json", "init"]);
+    assert_eq!(init_b["project"]["public_id"], "PRJ-2");
+
+    json_output(
+        repo_b.path(),
+        &db_path,
+        &["--json", "project", "update", "PRJ-2", "--prefix", "app"],
+    );
+    json_output(
+        repo_a.path(),
+        &db_path,
+        &["--json", "project", "use", "PRJ-2"],
+    );
+
+    let show = json_output(repo_a.path(), &db_path, &["--json", "project", "show"]);
+    assert_eq!(show["project"]["public_id"], "PRJ-2");
+
+    let created = json_output(
+        repo_a.path(),
+        &db_path,
+        &["--json", "item", "create", "--title", "Cross-project item"],
+    );
+    assert_eq!(created["item"]["public_id"], "APP-1");
+
+    let listed = json_output(repo_a.path(), &db_path, &["--json", "item", "list"]);
+    let items = listed["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["public_id"], "APP-1");
+
+    success_output(repo_a.path(), &db_path, &["item", "ready", "APP-1"]);
+    let next = json_output(repo_a.path(), &db_path, &["--json", "next"]);
+    assert_eq!(next["items"][0]["public_id"], "APP-1");
+}
+
+#[test]
 fn project_use_rejects_unknown_project() {
     let dir = setup_non_repo();
     let db_path = dir.path().join("test.sqlite3");

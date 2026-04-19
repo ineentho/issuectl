@@ -202,6 +202,20 @@ fn human_outputs_include_expected_text() {
 }
 
 #[test]
+fn human_item_create_ready_flag_sets_ready_state() {
+    let (repo, db_path) = setup_repo();
+    success_output(repo.path(), &db_path, &["init"]);
+
+    let create = success_output(
+        repo.path(),
+        &db_path,
+        &["item", "create", "--title", "Task", "--ready"],
+    );
+
+    assert!(stdout_string(&create).contains("status=todo priority=medium ready=true"));
+}
+
+#[test]
 fn history_list_is_limited_to_fifty_entries() {
     let (repo, db_path) = setup_repo();
     json_output(repo.path(), &db_path, &["--json", "init"]);

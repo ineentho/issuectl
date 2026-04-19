@@ -524,6 +524,32 @@ fn item_create_show_and_list_filters_cover_defaults_and_fields() {
 }
 
 #[test]
+fn item_create_ready_flag_marks_item_ready() {
+    let (repo, db_path) = setup_repo();
+    json_output(repo.path(), &db_path, &["--json", "init"]);
+
+    let created = json_output(
+        repo.path(),
+        &db_path,
+        &[
+            "--json",
+            "item",
+            "create",
+            "--title",
+            "Ready task",
+            "--ready",
+        ],
+    );
+
+    assert_eq!(created["item"]["public_id"], "WI-1");
+    assert_eq!(created["item"]["ready"], true);
+
+    let next = json_output(repo.path(), &db_path, &["--json", "next"]);
+    assert_eq!(next["items"].as_array().unwrap().len(), 1);
+    assert_eq!(next["items"][0]["public_id"], "WI-1");
+}
+
+#[test]
 fn item_update_status_ready_and_unready_work_and_closed_at_toggles() {
     let (repo, db_path) = setup_repo();
     json_output(repo.path(), &db_path, &["--json", "init"]);

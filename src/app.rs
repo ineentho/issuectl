@@ -205,7 +205,7 @@ impl App {
                 project_id: project.id,
                 title: args.title.clone(),
                 description: args.description.clone(),
-                ready: false,
+                ready: args.ready,
                 status: StatusArg::Todo.to_string(),
                 priority: args.priority.to_string(),
                 parent_id: parent_public_id,

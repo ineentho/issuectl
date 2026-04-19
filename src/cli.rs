@@ -95,6 +95,8 @@ pub struct ItemCreateArgs {
     #[arg(long, value_enum, default_value_t = PriorityArg::Medium)]
     pub priority: PriorityArg,
     #[arg(long)]
+    pub ready: bool,
+    #[arg(long)]
     pub parent: Option<String>,
     #[arg(long)]
     pub project: Option<String>,

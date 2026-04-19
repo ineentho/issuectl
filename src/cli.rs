@@ -142,6 +142,8 @@ pub struct ItemMoveArgs {
 pub struct NextArgs {
     #[arg(long, default_value_t = 1)]
     pub limit: usize,
+    #[arg(long)]
+    pub wait: bool,
 }
 
 #[derive(Args, Debug)]

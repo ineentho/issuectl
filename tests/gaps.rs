@@ -1,5 +1,8 @@
+use std::io::Read;
 use std::path::Path;
 use std::process::{Command, Output};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 use tempfile::TempDir;
@@ -290,4 +293,38 @@ fn invalid_enum_values_are_rejected_by_clap() {
     );
     assert_eq!(bad_priority.status.code(), Some(2));
     assert!(stderr_string(&bad_priority).contains("invalid value"));
+}
+
+#[test]
+fn next_wait_blocks_until_item_becomes_ready() {
+    let (repo, db_path) = setup_repo();
+    json_output(repo.path(), &db_path, &["--json", "init"]);
+    success_output(repo.path(), &db_path, &["item", "create", "--title", "Waiting Task"]);
+
+    let mut child = Command::new(assert_cmd::cargo::cargo_bin("issuecli"))
+        .current_dir(repo.path())
+        .env("ISSUECLI_DB_PATH", &db_path)
+        .args(["--json", "next", "--wait"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    thread::sleep(Duration::from_millis(350));
+    success_output(repo.path(), &db_path, &["item", "ready", "WI-1"]);
+
+    let start = Instant::now();
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            assert!(status.success());
+            break;
+        }
+        assert!(start.elapsed() < Duration::from_secs(5), "wait command did not complete");
+        thread::sleep(Duration::from_millis(50));
+    }
+
+    let mut stdout = String::new();
+    child.stdout.take().unwrap().read_to_string(&mut stdout).unwrap();
+    let json: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(json["items"][0]["public_id"], "WI-1");
 }

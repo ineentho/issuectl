@@ -1,3 +1,6 @@
+use std::thread;
+use std::time::Duration;
+
 use serde_json::json;
 
 use crate::cli::{
@@ -510,14 +513,20 @@ impl App {
     fn next(&self, args: NextArgs) -> CliResult<()> {
         let conn = open_connection(&self.db_path)?;
         let project = resolve_active_project_readonly(&conn, true, self.json_output)?;
-        let items = select_next_items(&conn, project.id, args.limit)?;
-
-        if items.is_empty() {
-            return Err(CliError::EmptyResult {
-                message: "No unblocked work items are available.".to_string(),
-                json: self.json_output,
-            });
-        }
+        let items = loop {
+            let conn = open_connection(&self.db_path)?;
+            let items = select_next_items(&conn, project.id, args.limit)?;
+            if !items.is_empty() {
+                break items;
+            }
+            if !args.wait {
+                return Err(CliError::EmptyResult {
+                    message: "No unblocked work items are available.".to_string(),
+                    json: self.json_output,
+                });
+            }
+            thread::sleep(Duration::from_millis(250));
+        };
 
         if self.json_output {
             emit_value(true, &json!({ "items": items }))

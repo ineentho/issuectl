@@ -124,7 +124,7 @@ pub fn get_or_create_project(
         .unwrap_or("project")
         .to_string();
     tx.execute(
-        "INSERT INTO projects (public_id, name, repo_root, created_at, updated_at, version, next_item_number) VALUES (?1, ?2, ?3, ?4, ?5, 1, 1)",
+        "INSERT INTO projects (public_id, name, repo_root, item_prefix, created_at, updated_at, version, next_item_number) VALUES (?1, ?2, ?3, 'WI', ?4, ?5, 1, 1)",
         params![public_id, name, repo_root_string, now, now],
     )?;
     let created = find_project_by_repo_root_tx(tx, &repo_root_string)?
@@ -147,11 +147,45 @@ pub fn get_or_create_project(
 
 pub fn list_projects(conn: &Connection) -> Result<Vec<ProjectRecord>> {
     let mut stmt = conn.prepare(
-        "SELECT public_id, name, repo_root, version, created_at, updated_at FROM projects ORDER BY updated_at DESC, public_id ASC",
+        "SELECT public_id, name, repo_root, item_prefix, version, created_at, updated_at FROM projects ORDER BY updated_at DESC, public_id ASC",
     )?;
     let rows = stmt.query_map([], |row| Ok(project_from_row(row)))?;
     rows.collect::<std::result::Result<Vec<_>, _>>()
         .map_err(Into::into)
+}
+
+pub fn update_project_prefix(
+    tx: &Transaction<'_>,
+    project_id: &str,
+    prefix: &str,
+) -> CliResult<ProjectRecord> {
+    let normalized = normalize_item_prefix(prefix)?;
+    let project =
+        find_project_by_public_id_tx(tx, project_id)?.ok_or_else(|| CliError::Validation {
+            message: format!("unknown project id: {project_id}"),
+            json: false,
+        })?;
+    let before = json!(project.record);
+    let updated_at = now_string();
+    let version = project.record.version + 1;
+    tx.execute(
+        "UPDATE projects SET item_prefix = ?1, updated_at = ?2, version = ?3 WHERE id = ?4",
+        params![normalized, updated_at, version, project.id],
+    )?;
+    let updated =
+        find_project_by_public_id_tx(tx, project_id)?.context("failed to read updated project")?;
+    let command = create_command(tx, Some(project.id), "project.update", None)?;
+    insert_event(
+        tx,
+        command.id,
+        Some(project.id),
+        "project",
+        &updated.record.public_id,
+        "update",
+        Some(before),
+        Some(json!(updated.record)),
+    )?;
+    Ok(updated.record)
 }
 
 pub fn set_project_override(tx: &Transaction<'_>, project_id: &str) -> CliResult<ProjectRecord> {
@@ -706,7 +740,7 @@ pub fn undo_command(tx: &Transaction<'_>, command_id: &str) -> CliResult<Value> 
 
 fn find_project_by_repo_root(conn: &Connection, repo_root: &str) -> Result<Option<ProjectRow>> {
     conn.query_row(
-        "SELECT id, public_id, name, repo_root, version, created_at, updated_at FROM projects WHERE repo_root = ?1",
+        "SELECT id, public_id, name, repo_root, item_prefix, version, created_at, updated_at FROM projects WHERE repo_root = ?1",
         params![repo_root],
         |row| Ok(ProjectRow { id: row.get(0)?, record: project_from_row_offset(row, 1) }),
     )
@@ -719,7 +753,7 @@ fn find_project_by_repo_root_tx(
     repo_root: &str,
 ) -> Result<Option<ProjectRow>> {
     tx.query_row(
-        "SELECT id, public_id, name, repo_root, version, created_at, updated_at FROM projects WHERE repo_root = ?1",
+        "SELECT id, public_id, name, repo_root, item_prefix, version, created_at, updated_at FROM projects WHERE repo_root = ?1",
         params![repo_root],
         |row| Ok(ProjectRow { id: row.get(0)?, record: project_from_row_offset(row, 1) }),
     )
@@ -729,7 +763,7 @@ fn find_project_by_repo_root_tx(
 
 fn find_project_by_public_id(conn: &Connection, project_id: &str) -> Result<Option<ProjectRow>> {
     conn.query_row(
-        "SELECT id, public_id, name, repo_root, version, created_at, updated_at FROM projects WHERE public_id = ?1",
+        "SELECT id, public_id, name, repo_root, item_prefix, version, created_at, updated_at FROM projects WHERE public_id = ?1",
         params![project_id],
         |row| Ok(ProjectRow { id: row.get(0)?, record: project_from_row_offset(row, 1) }),
     )
@@ -742,7 +776,7 @@ fn find_project_by_public_id_tx(
     project_id: &str,
 ) -> Result<Option<ProjectRow>> {
     tx.query_row(
-        "SELECT id, public_id, name, repo_root, version, created_at, updated_at FROM projects WHERE public_id = ?1",
+        "SELECT id, public_id, name, repo_root, item_prefix, version, created_at, updated_at FROM projects WHERE public_id = ?1",
         params![project_id],
         |row| Ok(ProjectRow { id: row.get(0)?, record: project_from_row_offset(row, 1) }),
     )
@@ -752,7 +786,7 @@ fn find_project_by_public_id_tx(
 
 fn find_project_override(conn: &Connection) -> Result<Option<ProjectRow>> {
     conn.query_row(
-        "SELECT p.id, p.public_id, p.name, p.repo_root, p.version, p.created_at, p.updated_at
+        "SELECT p.id, p.public_id, p.name, p.repo_root, p.item_prefix, p.version, p.created_at, p.updated_at
          FROM project_overrides po JOIN projects p ON p.id = po.project_id WHERE po.scope = 'global'",
         [],
         |row| Ok(ProjectRow { id: row.get(0)?, record: project_from_row_offset(row, 1) }),
@@ -763,7 +797,7 @@ fn find_project_override(conn: &Connection) -> Result<Option<ProjectRow>> {
 
 fn find_project_override_tx(tx: &Transaction<'_>) -> Result<Option<ProjectRow>> {
     tx.query_row(
-        "SELECT p.id, p.public_id, p.name, p.repo_root, p.version, p.created_at, p.updated_at
+        "SELECT p.id, p.public_id, p.name, p.repo_root, p.item_prefix, p.version, p.created_at, p.updated_at
          FROM project_overrides po JOIN projects p ON p.id = po.project_id WHERE po.scope = 'global'",
         [],
         |row| Ok(ProjectRow { id: row.get(0)?, record: project_from_row_offset(row, 1) }),
@@ -1011,9 +1045,10 @@ fn project_from_row(row: &rusqlite::Row<'_>) -> ProjectRecord {
         public_id: row.get::<_, String>(0).unwrap(),
         name: row.get::<_, String>(1).unwrap(),
         repo_root: row.get::<_, Option<String>>(2).unwrap(),
-        version: row.get::<_, i64>(3).unwrap(),
-        created_at: row.get::<_, String>(4).unwrap(),
-        updated_at: row.get::<_, String>(5).unwrap(),
+        item_prefix: row.get::<_, String>(3).unwrap(),
+        version: row.get::<_, i64>(4).unwrap(),
+        created_at: row.get::<_, String>(5).unwrap(),
+        updated_at: row.get::<_, String>(6).unwrap(),
     }
 }
 
@@ -1022,8 +1057,30 @@ fn project_from_row_offset(row: &rusqlite::Row<'_>, offset: usize) -> ProjectRec
         public_id: row.get(offset).unwrap(),
         name: row.get(offset + 1).unwrap(),
         repo_root: row.get(offset + 2).unwrap(),
-        version: row.get(offset + 3).unwrap(),
-        created_at: row.get(offset + 4).unwrap(),
-        updated_at: row.get(offset + 5).unwrap(),
+        item_prefix: row.get(offset + 3).unwrap(),
+        version: row.get(offset + 4).unwrap(),
+        created_at: row.get(offset + 5).unwrap(),
+        updated_at: row.get(offset + 6).unwrap(),
     }
+}
+
+fn normalize_item_prefix(prefix: &str) -> CliResult<String> {
+    let normalized = prefix.trim().to_ascii_uppercase();
+    if normalized.is_empty() {
+        return validation("project item prefix cannot be empty");
+    }
+    if !normalized
+        .chars()
+        .all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit())
+    {
+        return validation("project item prefix must use only A-Z and 0-9");
+    }
+    if !normalized
+        .chars()
+        .next()
+        .is_some_and(|ch| ch.is_ascii_uppercase())
+    {
+        return validation("project item prefix must start with A-Z");
+    }
+    Ok(normalized)
 }

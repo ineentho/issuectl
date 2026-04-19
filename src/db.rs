@@ -7,7 +7,13 @@ use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::error::{CliError, CliResult};
 
-const MIGRATIONS: &[(&str, &str)] = &[("0001_init", include_str!("../migrations/0001_init.sql"))];
+const MIGRATIONS: &[(&str, &str)] = &[
+    ("0001_init", include_str!("../migrations/0001_init.sql")),
+    (
+        "0002_project_item_prefix",
+        include_str!("../migrations/0002_project_item_prefix.sql"),
+    ),
+];
 const WRITE_LOCK_NAME: &str = "global_write";
 
 pub fn resolve_db_path() -> Result<PathBuf> {

@@ -296,6 +296,20 @@ fn invalid_enum_values_are_rejected_by_clap() {
 }
 
 #[test]
+fn invalid_project_prefixes_are_rejected() {
+    let (repo, db_path) = setup_repo();
+    json_output(repo.path(), &db_path, &["--json", "init"]);
+
+    let bad_prefix = output(
+        repo.path(),
+        &db_path,
+        &["project", "update", "PRJ-1", "--prefix", "bad-prefix"],
+    );
+    assert_eq!(bad_prefix.status.code(), Some(1));
+    assert!(stderr_string(&bad_prefix).contains("item prefix"));
+}
+
+#[test]
 fn next_wait_blocks_until_item_becomes_ready() {
     let (repo, db_path) = setup_repo();
     json_output(repo.path(), &db_path, &["--json", "init"]);

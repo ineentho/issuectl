@@ -47,6 +47,14 @@ pub enum ProjectCommand {
     Show,
     List,
     Use { project_id: String },
+    Update(ProjectUpdateArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct ProjectUpdateArgs {
+    pub project_id: String,
+    #[arg(long)]
+    pub prefix: String,
 }
 
 #[derive(Args, Debug)]

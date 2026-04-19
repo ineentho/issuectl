@@ -9,6 +9,7 @@ pub fn emit_project(json_output: bool, label: &str, project: &ProjectRecord) -> 
         emit_value(true, &json!({ "project": project }))
     } else {
         println!("{}: {} {}", label, project.public_id, project.name);
+        println!("item_prefix={}", project.item_prefix);
         if let Some(repo_root) = &project.repo_root {
             println!("repo_root={repo_root}");
         }

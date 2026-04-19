@@ -94,6 +94,7 @@ pub struct ProjectRecord {
     pub public_id: String,
     pub name: String,
     pub repo_root: Option<String>,
+    pub item_prefix: String,
     pub version: i64,
     pub created_at: String,
     pub updated_at: String,

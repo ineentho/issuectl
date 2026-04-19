@@ -1,0 +1,1 @@
+ALTER TABLE projects ADD COLUMN item_prefix TEXT NOT NULL DEFAULT 'WI';

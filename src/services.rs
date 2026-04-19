@@ -193,7 +193,7 @@ impl IssueService {
             };
             let number =
                 allocate_project_item_number(tx, project.id).map_err(CliError::Operational)?;
-            let public_id = format!("WI-{number}");
+            let public_id = format!("{}-{number}", project.record.item_prefix);
             let now = now_string();
             let parent_public_id = parent.as_ref().map(|item| item.record.public_id.clone());
             let parent_row_id = parent.as_ref().map(|item| item.row_id);

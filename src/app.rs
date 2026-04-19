@@ -6,8 +6,8 @@ use serde_json::json;
 
 use crate::cli::{
     Commands, HistoryArgs, HistoryCommand, ItemArgs, ItemCommand, ItemCreateArgs, ItemListArgs,
-    ItemMoveArgs, ItemUpdateArgs, NextArgs, ProjectArgs, ProjectCommand, ReviewArgs, ReviewCommand,
-    UndoArgs,
+    ItemMoveArgs, ItemUpdateArgs, NextArgs, ProjectArgs, ProjectCommand, ProjectUpdateArgs,
+    ReviewArgs, ReviewCommand, UndoArgs,
 };
 use crate::db::{
     initialize_database, now_string, open_connection, owner_id, resolve_db_path, with_write,
@@ -26,7 +26,7 @@ use crate::repo::{
     list_blockers, list_children, list_commands, list_item_history, list_items, list_projects,
     list_root_items, resolve_active_item, resolve_active_project, resolve_active_project_readonly,
     resolve_active_project_with_override, resolve_parent_row_id, resolve_project_tx,
-    select_next_items, set_project_override, undo_command,
+    select_next_items, set_project_override, undo_command, update_project_prefix,
 };
 
 pub struct App {
@@ -117,6 +117,14 @@ impl App {
                 })?;
                 emit_project(self.json_output, "Selected project", &project)
             }
+            ProjectCommand::Update(ProjectUpdateArgs { project_id, prefix }) => {
+                let mut conn = open_connection(&self.db_path)?;
+                let owner = owner_id();
+                let project = with_write(&mut conn, &owner, |tx| {
+                    update_project_prefix(tx, &project_id, &prefix)
+                })?;
+                emit_project(self.json_output, "Updated project", &project)
+            }
         }
     }
 
@@ -161,7 +169,7 @@ impl App {
             };
 
             let number = allocate_project_item_number(tx, project.id)?;
-            let public_id = format!("WI-{number}");
+            let public_id = format!("{}-{number}", project.record.item_prefix);
             let now = now_string();
             let parent_public_id = parent.as_ref().map(|item| item.record.public_id.clone());
             let parent_row_id = parent.as_ref().map(|item| item.row_id);

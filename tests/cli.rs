@@ -162,6 +162,59 @@ fn project_use_rejects_unknown_project() {
 }
 
 #[test]
+fn project_specific_prefixes_apply_to_new_items_without_rewriting_existing_ids() {
+    let (repo_one, db_path) = setup_repo();
+    let (repo_two, _) = setup_repo();
+
+    let init_one = json_output(repo_one.path(), &db_path, &["--json", "init"]);
+    assert_eq!(init_one["project"]["item_prefix"], "WI");
+
+    let first_item = json_output(
+        repo_one.path(),
+        &db_path,
+        &["--json", "item", "create", "--title", "Legacy"],
+    );
+    assert_eq!(first_item["item"]["public_id"], "WI-1");
+
+    let updated_one = json_output(
+        repo_one.path(),
+        &db_path,
+        &["--json", "project", "update", "PRJ-1", "--prefix", "app"],
+    );
+    assert_eq!(updated_one["project"]["item_prefix"], "APP");
+
+    let prefixed_item = json_output(
+        repo_one.path(),
+        &db_path,
+        &["--json", "item", "create", "--title", "Scoped"],
+    );
+    assert_eq!(prefixed_item["item"]["public_id"], "APP-2");
+
+    let legacy_show = json_output(
+        repo_one.path(),
+        &db_path,
+        &["--json", "item", "show", "WI-1"],
+    );
+    assert_eq!(legacy_show["item"]["public_id"], "WI-1");
+
+    let init_two = json_output(repo_two.path(), &db_path, &["--json", "init"]);
+    assert_eq!(init_two["project"]["public_id"], "PRJ-2");
+    assert_eq!(init_two["project"]["item_prefix"], "WI");
+
+    json_output(
+        repo_two.path(),
+        &db_path,
+        &["--json", "project", "update", "PRJ-2", "--prefix", "ops9"],
+    );
+    let second_project_item = json_output(
+        repo_two.path(),
+        &db_path,
+        &["--json", "item", "create", "--title", "Ops task"],
+    );
+    assert_eq!(second_project_item["item"]["public_id"], "OPS9-1");
+}
+
+#[test]
 fn item_create_show_and_list_filters_cover_defaults_and_fields() {
     let (repo, db_path) = setup_repo();
     json_output(repo.path(), &db_path, &["--json", "init"]);

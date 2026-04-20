@@ -545,7 +545,7 @@ mod tests {
                 )
                 .unwrap();
             let number = allocate_project_item_number(tx, project_id).unwrap();
-            let public_id = format!("WI-{number}");
+            let public_id = format!("{}-{number}", project.item_prefix);
             let now = now_string();
             let item = WorkItemRecord {
                 public_id: public_id.clone(),

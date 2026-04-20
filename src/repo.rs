@@ -175,9 +175,10 @@ pub fn get_or_create_project(
         .and_then(|name| name.to_str())
         .unwrap_or("project")
         .to_string();
+    let item_prefix = default_item_prefix(&name);
     tx.execute(
-        "INSERT INTO projects (public_id, name, repo_root, item_prefix, created_at, updated_at, version, next_item_number) VALUES (?1, ?2, ?3, 'WI', ?4, ?5, 1, 1)",
-        params![public_id, name, repo_root_string, now, now],
+        "INSERT INTO projects (public_id, name, repo_root, item_prefix, created_at, updated_at, version, next_item_number) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, 1)",
+        params![public_id, name, repo_root_string, item_prefix, now, now],
     )?;
     let created = find_project_by_repo_root_tx(tx, &repo_root_string)?
         .context("failed to read created project")?;
@@ -1164,4 +1165,11 @@ fn normalize_item_prefix(prefix: &str) -> CliResult<String> {
         return validation("project item prefix must start with A-Z");
     }
     Ok(normalized)
+}
+
+fn default_item_prefix(name: &str) -> String {
+    name.chars()
+        .find(|ch| ch.is_ascii_alphabetic())
+        .map(|ch| ch.to_ascii_uppercase().to_string())
+        .unwrap_or_else(|| "P".to_string())
 }

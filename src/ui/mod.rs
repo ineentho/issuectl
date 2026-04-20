@@ -88,11 +88,11 @@ impl IssueUi {
     fn new(service: IssueService, cx: &mut Context<Self>) -> Self {
         let create_title = cx.new(|cx| TextInput::new(cx, "New item title"));
         let create_description = cx.new(|cx| TextInput::new(cx, "Description"));
-        let create_parent = cx.new(|cx| TextInput::new(cx, "Parent WI id (optional)"));
+        let create_parent = cx.new(|cx| TextInput::new(cx, "Parent item id (optional)"));
         let item_search = cx.new(|cx| TextInput::new(cx, "Filter items by id or title"));
         let edit_title = cx.new(|cx| TextInput::new(cx, "Selected item title"));
         let edit_description = cx.new(|cx| TextInput::new(cx, "Selected item description"));
-        let move_parent = cx.new(|cx| TextInput::new(cx, "New parent WI id, blank for root"));
+        let move_parent = cx.new(|cx| TextInput::new(cx, "New parent item id, blank for root"));
         let block_target = cx.new(|cx| TextInput::new(cx, "Blocked item id"));
         let block_by = cx.new(|cx| TextInput::new(cx, "Blocker item id"));
         let mut this = Self {

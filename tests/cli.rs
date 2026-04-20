@@ -93,6 +93,20 @@ fn path_string(path: &Path) -> String {
         .to_string()
 }
 
+fn default_item_prefix(path: &Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("project")
+        .chars()
+        .find(|ch| ch.is_ascii_alphabetic())
+        .map(|ch| ch.to_ascii_uppercase().to_string())
+        .unwrap_or_else(|| "P".to_string())
+}
+
+fn item_id(path: &Path, number: usize) -> String {
+    format!("{}-{number}", default_item_prefix(path))
+}
+
 #[test]
 fn init_requires_git_repository() {
     let dir = setup_non_repo();
@@ -396,16 +410,19 @@ fn project_use_rejects_unknown_project() {
 fn project_specific_prefixes_apply_to_new_items_without_rewriting_existing_ids() {
     let (repo_one, db_path) = setup_repo();
     let (repo_two, _) = setup_repo();
+    let repo_one_prefix = default_item_prefix(repo_one.path());
+    let repo_two_prefix = default_item_prefix(repo_two.path());
+    let repo_one_first_item = item_id(repo_one.path(), 1);
 
     let init_one = json_output(repo_one.path(), &db_path, &["--json", "init"]);
-    assert_eq!(init_one["project"]["item_prefix"], "WI");
+    assert_eq!(init_one["project"]["item_prefix"], repo_one_prefix);
 
     let first_item = json_output(
         repo_one.path(),
         &db_path,
         &["--json", "item", "create", "--title", "Legacy"],
     );
-    assert_eq!(first_item["item"]["public_id"], "WI-1");
+    assert_eq!(first_item["item"]["public_id"], repo_one_first_item);
 
     let updated_one = json_output(
         repo_one.path(),
@@ -424,13 +441,13 @@ fn project_specific_prefixes_apply_to_new_items_without_rewriting_existing_ids()
     let legacy_show = json_output(
         repo_one.path(),
         &db_path,
-        &["--json", "item", "show", "WI-1"],
+        &["--json", "item", "show", &repo_one_first_item],
     );
-    assert_eq!(legacy_show["item"]["public_id"], "WI-1");
+    assert_eq!(legacy_show["item"]["public_id"], repo_one_first_item);
 
     let init_two = json_output(repo_two.path(), &db_path, &["--json", "init"]);
     assert_eq!(init_two["project"]["public_id"], "PRJ-2");
-    assert_eq!(init_two["project"]["item_prefix"], "WI");
+    assert_eq!(init_two["project"]["item_prefix"], repo_two_prefix);
 
     json_output(
         repo_two.path(),
@@ -449,6 +466,8 @@ fn project_specific_prefixes_apply_to_new_items_without_rewriting_existing_ids()
 fn item_create_show_and_list_filters_cover_defaults_and_fields() {
     let (repo, db_path) = setup_repo();
     json_output(repo.path(), &db_path, &["--json", "init"]);
+    let parent_id = item_id(repo.path(), 1);
+    let child_id = item_id(repo.path(), 2);
 
     let parent = json_output(
         repo.path(),
@@ -479,19 +498,19 @@ fn item_create_show_and_list_filters_cover_defaults_and_fields() {
             "--priority",
             "low",
             "--parent",
-            "WI-1",
+            &parent_id,
         ],
     );
 
-    assert_eq!(parent["item"]["public_id"], "WI-1");
+    assert_eq!(parent["item"]["public_id"], parent_id);
     assert_eq!(parent["item"]["ready"], false);
     assert_eq!(parent["item"]["status"], "todo");
     assert_eq!(parent["item"]["priority"], "high");
-    assert_eq!(child["item"]["parent_id"], "WI-1");
+    assert_eq!(child["item"]["parent_id"], parent_id);
 
-    let show = json_output(repo.path(), &db_path, &["--json", "item", "show", "WI-1"]);
+    let show = json_output(repo.path(), &db_path, &["--json", "item", "show", &parent_id]);
     assert_eq!(show["item"]["title"], "Parent");
-    assert_eq!(show["children"][0]["public_id"], "WI-2");
+    assert_eq!(show["children"][0]["public_id"], child_id);
     assert!(show["blockers"].as_array().unwrap().is_empty());
     assert!(show["blocked_by"].as_array().unwrap().is_empty());
 
@@ -504,15 +523,15 @@ fn item_create_show_and_list_filters_cover_defaults_and_fields() {
 
     let roots = json_output(repo.path(), &db_path, &["--json", "item", "list", "--root"]);
     assert_eq!(roots["items"].as_array().unwrap().len(), 1);
-    assert_eq!(roots["items"][0]["public_id"], "WI-1");
+    assert_eq!(roots["items"][0]["public_id"], parent_id);
 
     let by_parent = json_output(
         repo.path(),
         &db_path,
-        &["--json", "item", "list", "--parent", "WI-1"],
+        &["--json", "item", "list", "--parent", &parent_id],
     );
     assert_eq!(by_parent["items"].as_array().unwrap().len(), 1);
-    assert_eq!(by_parent["items"][0]["public_id"], "WI-2");
+    assert_eq!(by_parent["items"][0]["public_id"], child_id);
 
     let by_priority = json_output(
         repo.path(),
@@ -520,13 +539,14 @@ fn item_create_show_and_list_filters_cover_defaults_and_fields() {
         &["--json", "item", "list", "--priority", "high"],
     );
     assert_eq!(by_priority["items"].as_array().unwrap().len(), 1);
-    assert_eq!(by_priority["items"][0]["public_id"], "WI-1");
+    assert_eq!(by_priority["items"][0]["public_id"], parent_id);
 }
 
 #[test]
 fn item_create_ready_flag_marks_item_ready() {
     let (repo, db_path) = setup_repo();
     json_output(repo.path(), &db_path, &["--json", "init"]);
+    let first_id = item_id(repo.path(), 1);
 
     let created = json_output(
         repo.path(),
@@ -541,12 +561,12 @@ fn item_create_ready_flag_marks_item_ready() {
         ],
     );
 
-    assert_eq!(created["item"]["public_id"], "WI-1");
+    assert_eq!(created["item"]["public_id"], first_id);
     assert_eq!(created["item"]["ready"], true);
 
     let next = json_output(repo.path(), &db_path, &["--json", "next"]);
     assert_eq!(next["items"].as_array().unwrap().len(), 1);
-    assert_eq!(next["items"][0]["public_id"], "WI-1");
+    assert_eq!(next["items"][0]["public_id"], first_id);
 }
 
 #[test]
@@ -554,6 +574,7 @@ fn item_update_status_ready_and_unready_work_and_closed_at_toggles() {
     let (repo, db_path) = setup_repo();
     json_output(repo.path(), &db_path, &["--json", "init"]);
     create_item(repo.path(), &db_path, "Task");
+    let first_id = item_id(repo.path(), 1);
 
     let updated = json_output(
         repo.path(),
@@ -562,7 +583,7 @@ fn item_update_status_ready_and_unready_work_and_closed_at_toggles() {
             "--json",
             "item",
             "update",
-            "WI-1",
+            &first_id,
             "--title",
             "Renamed",
             "--description",
@@ -574,13 +595,13 @@ fn item_update_status_ready_and_unready_work_and_closed_at_toggles() {
     assert_eq!(updated["item"]["title"], "Renamed");
     assert_eq!(updated["item"]["priority"], "urgent");
 
-    let ready = json_output(repo.path(), &db_path, &["--json", "item", "ready", "WI-1"]);
+    let ready = json_output(repo.path(), &db_path, &["--json", "item", "ready", &first_id]);
     assert_eq!(ready["item"]["ready"], true);
 
     let done = json_output(
         repo.path(),
         &db_path,
-        &["--json", "item", "status", "WI-1", "done"],
+        &["--json", "item", "status", &first_id, "done"],
     );
     assert_eq!(done["item"]["status"], "done");
     assert!(done["item"]["closed_at"].as_str().unwrap().ends_with('Z'));
@@ -588,14 +609,14 @@ fn item_update_status_ready_and_unready_work_and_closed_at_toggles() {
     let reopened = json_output(
         repo.path(),
         &db_path,
-        &["--json", "item", "status", "WI-1", "todo"],
+        &["--json", "item", "status", &first_id, "todo"],
     );
     assert_eq!(reopened["item"]["closed_at"], Value::Null);
 
     let unready = json_output(
         repo.path(),
         &db_path,
-        &["--json", "item", "unready", "WI-1"],
+        &["--json", "item", "unready", &first_id],
     );
     assert_eq!(unready["item"]["ready"], false);
 }
@@ -606,35 +627,37 @@ fn move_children_and_tree_commands_render_hierarchy() {
     json_output(repo.path(), &db_path, &["--json", "init"]);
     create_item(repo.path(), &db_path, "Root A");
     create_item(repo.path(), &db_path, "Root B");
+    let first_id = item_id(repo.path(), 1);
+    let second_id = item_id(repo.path(), 2);
 
     let moved = json_output(
         repo.path(),
         &db_path,
-        &["--json", "item", "move", "WI-2", "--parent", "WI-1"],
+        &["--json", "item", "move", &second_id, "--parent", &first_id],
     );
-    assert_eq!(moved["item"]["parent_id"], "WI-1");
+    assert_eq!(moved["item"]["parent_id"], first_id);
 
     let children = json_output(
         repo.path(),
         &db_path,
-        &["--json", "item", "children", "WI-1"],
+        &["--json", "item", "children", &first_id],
     );
     assert_eq!(children["children"].as_array().unwrap().len(), 1);
-    assert_eq!(children["children"][0]["public_id"], "WI-2");
+    assert_eq!(children["children"][0]["public_id"], second_id);
 
     let tree = json_output(repo.path(), &db_path, &["--json", "item", "tree"]);
     assert_eq!(tree["tree"].as_array().unwrap().len(), 1);
-    assert_eq!(tree["tree"][0]["item"]["public_id"], "WI-1");
-    assert_eq!(tree["tree"][0]["children"][0]["item"]["public_id"], "WI-2");
+    assert_eq!(tree["tree"][0]["item"]["public_id"], first_id);
+    assert_eq!(tree["tree"][0]["children"][0]["item"]["public_id"], second_id);
 
-    let subtree = json_output(repo.path(), &db_path, &["--json", "item", "tree", "WI-1"]);
+    let subtree = json_output(repo.path(), &db_path, &["--json", "item", "tree", &first_id]);
     assert_eq!(subtree["tree"].as_array().unwrap().len(), 1);
-    assert_eq!(subtree["tree"][0]["item"]["public_id"], "WI-1");
+    assert_eq!(subtree["tree"][0]["item"]["public_id"], first_id);
 
     let root_again = json_output(
         repo.path(),
         &db_path,
-        &["--json", "item", "move", "WI-2", "--root"],
+        &["--json", "item", "move", &second_id, "--root"],
     );
     assert_eq!(root_again["item"]["parent_id"], Value::Null);
 }
@@ -645,17 +668,19 @@ fn review_tree_command_surfaces_review_state_in_json_and_human_output() {
     json_output(repo.path(), &db_path, &["--json", "init"]);
     create_item(repo.path(), &db_path, "Parent");
     create_item(repo.path(), &db_path, "Child");
+    let first_id = item_id(repo.path(), 1);
+    let second_id = item_id(repo.path(), 2);
 
     success_output(
         repo.path(),
         &db_path,
-        &["item", "move", "WI-2", "--parent", "WI-1"],
+        &["item", "move", &second_id, "--parent", &first_id],
     );
-    success_output(repo.path(), &db_path, &["item", "ready", "WI-1"]);
+    success_output(repo.path(), &db_path, &["item", "ready", &first_id]);
 
     let review_tree = json_output(repo.path(), &db_path, &["--json", "review", "tree"]);
     assert_eq!(review_tree["tree"].as_array().unwrap().len(), 1);
-    assert_eq!(review_tree["tree"][0]["item"]["public_id"], "WI-1");
+    assert_eq!(review_tree["tree"][0]["item"]["public_id"], first_id);
     assert_eq!(review_tree["tree"][0]["review_state"], "WAIT");
     assert_eq!(
         review_tree["tree"][0]["review_reason"],
@@ -664,7 +689,7 @@ fn review_tree_command_surfaces_review_state_in_json_and_human_output() {
     assert_eq!(review_tree["tree"][0]["has_unready_descendants"], true);
     assert_eq!(
         review_tree["tree"][0]["children"][0]["item"]["public_id"],
-        "WI-2"
+        second_id
     );
     assert_eq!(
         review_tree["tree"][0]["children"][0]["review_state"],
@@ -677,8 +702,8 @@ fn review_tree_command_surfaces_review_state_in_json_and_human_output() {
 
     let review_human = success_output(repo.path(), &db_path, &["review", "tree"]);
     let stdout = stdout_string(&review_human);
-    assert!(stdout.contains("WAIT WI-1 [todo ready=true]"));
-    assert!(stdout.contains("REVIEW WI-2 [todo ready=false]"));
+    assert!(stdout.contains(&format!("WAIT {first_id} [todo ready=true]")));
+    assert!(stdout.contains(&format!("REVIEW {second_id} [todo ready=false]")));
     assert!(stdout.contains("reason=waiting on 1 unready descendant(s)"));
 }
 
@@ -688,11 +713,13 @@ fn parent_validation_rejects_self_parent_cycles_and_conflicting_flags() {
     json_output(repo.path(), &db_path, &["--json", "init"]);
     create_item(repo.path(), &db_path, "A");
     create_item(repo.path(), &db_path, "B");
+    let first_id = item_id(repo.path(), 1);
+    let second_id = item_id(repo.path(), 2);
 
     let self_parent = output(
         repo.path(),
         &db_path,
-        &["item", "move", "WI-1", "--parent", "WI-1"],
+        &["item", "move", &first_id, "--parent", &first_id],
     );
     assert_eq!(self_parent.status.code(), Some(1));
     assert!(stderr_string(&self_parent).contains("own parent"));
@@ -700,12 +727,12 @@ fn parent_validation_rejects_self_parent_cycles_and_conflicting_flags() {
     success_output(
         repo.path(),
         &db_path,
-        &["item", "move", "WI-2", "--parent", "WI-1"],
+        &["item", "move", &second_id, "--parent", &first_id],
     );
     let cycle = output(
         repo.path(),
         &db_path,
-        &["item", "move", "WI-1", "--parent", "WI-2"],
+        &["item", "move", &first_id, "--parent", &second_id],
     );
     assert_eq!(cycle.status.code(), Some(1));
     assert!(stderr_string(&cycle).contains("create a cycle"));
@@ -713,7 +740,7 @@ fn parent_validation_rejects_self_parent_cycles_and_conflicting_flags() {
     let conflicting = output(
         repo.path(),
         &db_path,
-        &["item", "update", "WI-1", "--parent", "WI-2", "--root"],
+        &["item", "update", &first_id, "--parent", &second_id, "--root"],
     );
     assert_eq!(conflicting.status.code(), Some(2));
     assert!(stderr_string(&conflicting).contains("cannot use --parent and --root together"));
@@ -725,22 +752,24 @@ fn block_unblock_blockers_and_blocked_filter_work() {
     json_output(repo.path(), &db_path, &["--json", "init"]);
     create_item(repo.path(), &db_path, "A");
     create_item(repo.path(), &db_path, "B");
+    let first_id = item_id(repo.path(), 1);
+    let second_id = item_id(repo.path(), 2);
 
     let blocked = json_output(
         repo.path(),
         &db_path,
-        &["--json", "item", "block", "WI-2", "--by", "WI-1"],
+        &["--json", "item", "block", &second_id, "--by", &first_id],
     );
-    assert_eq!(blocked["blocked"]["public_id"], "WI-2");
-    assert_eq!(blocked["blocker"]["public_id"], "WI-1");
+    assert_eq!(blocked["blocked"]["public_id"], second_id);
+    assert_eq!(blocked["blocker"]["public_id"], first_id);
     assert_eq!(blocked["added"], true);
 
     let blockers = json_output(
         repo.path(),
         &db_path,
-        &["--json", "item", "blockers", "WI-2"],
+        &["--json", "item", "blockers", &second_id],
     );
-    assert_eq!(blockers["blockers"][0], "WI-1");
+    assert_eq!(blockers["blockers"][0], first_id);
     assert!(blockers["blocked_by"].as_array().unwrap().is_empty());
 
     let blocked_items = json_output(
@@ -749,12 +778,12 @@ fn block_unblock_blockers_and_blocked_filter_work() {
         &["--json", "item", "list", "--blocked", "true"],
     );
     assert_eq!(blocked_items["items"].as_array().unwrap().len(), 1);
-    assert_eq!(blocked_items["items"][0]["public_id"], "WI-2");
+    assert_eq!(blocked_items["items"][0]["public_id"], second_id);
 
     let unblocked = json_output(
         repo.path(),
         &db_path,
-        &["--json", "item", "unblock", "WI-2", "--by", "WI-1"],
+        &["--json", "item", "unblock", &second_id, "--by", &first_id],
     );
     assert_eq!(unblocked["added"], false);
 
@@ -773,11 +802,14 @@ fn block_validation_rejects_self_block_and_cycles() {
     create_item(repo.path(), &db_path, "A");
     create_item(repo.path(), &db_path, "B");
     create_item(repo.path(), &db_path, "C");
+    let first_id = item_id(repo.path(), 1);
+    let second_id = item_id(repo.path(), 2);
+    let third_id = item_id(repo.path(), 3);
 
     let self_block = output(
         repo.path(),
         &db_path,
-        &["item", "block", "WI-1", "--by", "WI-1"],
+        &["item", "block", &first_id, "--by", &first_id],
     );
     assert_eq!(self_block.status.code(), Some(1));
     assert!(stderr_string(&self_block).contains("cannot block itself"));
@@ -785,17 +817,17 @@ fn block_validation_rejects_self_block_and_cycles() {
     success_output(
         repo.path(),
         &db_path,
-        &["item", "block", "WI-2", "--by", "WI-1"],
+        &["item", "block", &second_id, "--by", &first_id],
     );
     success_output(
         repo.path(),
         &db_path,
-        &["item", "block", "WI-3", "--by", "WI-2"],
+        &["item", "block", &third_id, "--by", &second_id],
     );
     let cycle = output(
         repo.path(),
         &db_path,
-        &["item", "block", "WI-1", "--by", "WI-3"],
+        &["item", "block", &first_id, "--by", &third_id],
     );
     assert_eq!(cycle.status.code(), Some(1));
     assert!(stderr_string(&cycle).contains("create a cycle"));
@@ -806,24 +838,27 @@ fn next_respects_ready_blockers_terminal_states_and_open_children() {
     let (repo, db_path) = setup_repo();
     json_output(repo.path(), &db_path, &["--json", "init"]);
     create_item(repo.path(), &db_path, "Parent");
+    let first_id = item_id(repo.path(), 1);
+    let second_id = item_id(repo.path(), 2);
+    let third_id = item_id(repo.path(), 3);
+    let fourth_id = item_id(repo.path(), 4);
+    let fifth_id = item_id(repo.path(), 5);
     json_output(
         repo.path(),
         &db_path,
-        &[
-            "--json", "item", "create", "--title", "Child", "--parent", "WI-1",
-        ],
+        &["--json", "item", "create", "--title", "Child", "--parent", &first_id],
     );
     create_item(repo.path(), &db_path, "Blocked Work");
     create_item(repo.path(), &db_path, "Blocker");
     create_item(repo.path(), &db_path, "Best Candidate");
 
-    for id in ["WI-1", "WI-2", "WI-3", "WI-4", "WI-5"] {
+    for id in [&first_id, &second_id, &third_id, &fourth_id, &fifth_id] {
         json_output(repo.path(), &db_path, &["--json", "item", "ready", id]);
     }
     json_output(
         repo.path(),
         &db_path,
-        &["--json", "item", "block", "WI-3", "--by", "WI-4"],
+        &["--json", "item", "block", &third_id, "--by", &fourth_id],
     );
 
     let next = json_output(repo.path(), &db_path, &["--json", "next", "--limit", "5"]);
@@ -833,18 +868,18 @@ fn next_respects_ready_blockers_terminal_states_and_open_children() {
         .iter()
         .map(|item| item["public_id"].as_str().unwrap())
         .collect();
-    assert_eq!(ids, vec!["WI-2", "WI-4", "WI-5"]);
+    assert_eq!(ids, vec![second_id.as_str(), fourth_id.as_str(), fifth_id.as_str()]);
     assert_eq!(
         next["explanations"][0]["reason"],
         "ready to start; blockers=0 open_children=0"
     );
-    assert!(!ids.contains(&"WI-1"));
-    assert!(!ids.contains(&"WI-3"));
+    assert!(!ids.contains(&first_id.as_str()));
+    assert!(!ids.contains(&third_id.as_str()));
 
     json_output(
         repo.path(),
         &db_path,
-        &["--json", "item", "status", "WI-4", "done"],
+        &["--json", "item", "status", &fourth_id, "done"],
     );
     let next_after_done = json_output(repo.path(), &db_path, &["--json", "next", "--limit", "5"]);
     let ids_after_done: Vec<_> = next_after_done["items"]
@@ -853,13 +888,15 @@ fn next_respects_ready_blockers_terminal_states_and_open_children() {
         .iter()
         .map(|item| item["public_id"].as_str().unwrap())
         .collect();
-    assert!(ids_after_done.contains(&"WI-3"));
+    assert!(ids_after_done.contains(&third_id.as_str()));
 }
 
 #[test]
 fn undo_reverts_project_prefix_updates() {
     let (repo, db_path) = setup_repo();
     json_output(repo.path(), &db_path, &["--json", "init"]);
+    let repo_prefix = default_item_prefix(repo.path());
+    let first_id = item_id(repo.path(), 1);
     json_output(
         repo.path(),
         &db_path,
@@ -870,14 +907,14 @@ fn undo_reverts_project_prefix_updates() {
     assert_eq!(undone["reversed_command"], "CMD-2");
 
     let project = json_output(repo.path(), &db_path, &["--json", "project", "show"]);
-    assert_eq!(project["project"]["item_prefix"], "WI");
+    assert_eq!(project["project"]["item_prefix"], repo_prefix);
 
     let created = json_output(
         repo.path(),
         &db_path,
         &["--json", "item", "create", "--title", "Task"],
     );
-    assert_eq!(created["item"]["public_id"], "WI-1");
+    assert_eq!(created["item"]["public_id"], first_id);
 }
 
 #[test]
@@ -900,12 +937,13 @@ fn history_show_command_and_list_cover_recorded_events() {
     let (repo, db_path) = setup_repo();
     json_output(repo.path(), &db_path, &["--json", "init"]);
     create_item(repo.path(), &db_path, "Task");
-    json_output(repo.path(), &db_path, &["--json", "item", "ready", "WI-1"]);
+    let first_id = item_id(repo.path(), 1);
+    json_output(repo.path(), &db_path, &["--json", "item", "ready", &first_id]);
 
     let history = json_output(
         repo.path(),
         &db_path,
-        &["--json", "history", "show", "WI-1"],
+        &["--json", "history", "show", &first_id],
     );
     let operations: Vec<_> = history["events"]
         .as_array()
@@ -935,21 +973,23 @@ fn undo_reverts_create_update_ready_block_and_unblock_commands() {
     json_output(repo.path(), &db_path, &["--json", "init"]);
     create_item(repo.path(), &db_path, "A");
     create_item(repo.path(), &db_path, "B");
+    let first_id = item_id(repo.path(), 1);
+    let second_id = item_id(repo.path(), 2);
     json_output(
         repo.path(),
         &db_path,
-        &["--json", "item", "update", "WI-1", "--title", "Renamed"],
+        &["--json", "item", "update", &first_id, "--title", "Renamed"],
     );
-    json_output(repo.path(), &db_path, &["--json", "item", "ready", "WI-1"]);
+    json_output(repo.path(), &db_path, &["--json", "item", "ready", &first_id]);
     json_output(
         repo.path(),
         &db_path,
-        &["--json", "item", "block", "WI-2", "--by", "WI-1"],
+        &["--json", "item", "block", &second_id, "--by", &first_id],
     );
     json_output(
         repo.path(),
         &db_path,
-        &["--json", "item", "unblock", "WI-2", "--by", "WI-1"],
+        &["--json", "item", "unblock", &second_id, "--by", &first_id],
     );
 
     let undo_unblock = json_output(repo.path(), &db_path, &["--json", "undo", "CMD-7"]);
@@ -957,16 +997,17 @@ fn undo_reverts_create_update_ready_block_and_unblock_commands() {
     let blockers_after_unblock_undo = json_output(
         repo.path(),
         &db_path,
-        &["--json", "item", "blockers", "WI-2"],
+        &["--json", "item", "blockers", &second_id],
     );
-    assert_eq!(blockers_after_unblock_undo["blockers"][0], "WI-1");
+    assert_eq!(blockers_after_unblock_undo["blockers"][0], first_id);
 
     let undo_block_refusal = output(repo.path(), &db_path, &["undo", "CMD-6"]);
     assert_eq!(undo_block_refusal.status.code(), Some(1));
     assert!(stderr_string(&undo_block_refusal).contains("later changes exist"));
 
     json_output(repo.path(), &db_path, &["--json", "undo", "CMD-5"]);
-    let after_ready_undo = json_output(repo.path(), &db_path, &["--json", "item", "show", "WI-1"]);
+    let after_ready_undo =
+        json_output(repo.path(), &db_path, &["--json", "item", "show", &first_id]);
     assert_eq!(after_ready_undo["item"]["ready"], false);
 
     let undo_update_refusal = output(repo.path(), &db_path, &["undo", "CMD-4"]);
@@ -980,10 +1021,12 @@ fn undo_reverts_block_when_no_later_relation_change_exists() {
     json_output(repo.path(), &db_path, &["--json", "init"]);
     create_item(repo.path(), &db_path, "A");
     create_item(repo.path(), &db_path, "B");
+    let first_id = item_id(repo.path(), 1);
+    let second_id = item_id(repo.path(), 2);
     json_output(
         repo.path(),
         &db_path,
-        &["--json", "item", "block", "WI-2", "--by", "WI-1"],
+        &["--json", "item", "block", &second_id, "--by", &first_id],
     );
 
     let undone = json_output(repo.path(), &db_path, &["--json", "undo", "CMD-4"]);
@@ -992,7 +1035,7 @@ fn undo_reverts_block_when_no_later_relation_change_exists() {
     let blockers = json_output(
         repo.path(),
         &db_path,
-        &["--json", "item", "blockers", "WI-2"],
+        &["--json", "item", "blockers", &second_id],
     );
     assert!(blockers["blockers"].as_array().unwrap().is_empty());
 }
@@ -1002,16 +1045,17 @@ fn undo_reverts_update_when_no_later_item_change_exists() {
     let (repo, db_path) = setup_repo();
     json_output(repo.path(), &db_path, &["--json", "init"]);
     create_item(repo.path(), &db_path, "A");
+    let first_id = item_id(repo.path(), 1);
     json_output(
         repo.path(),
         &db_path,
-        &["--json", "item", "update", "WI-1", "--title", "Renamed"],
+        &["--json", "item", "update", &first_id, "--title", "Renamed"],
     );
 
     let undone = json_output(repo.path(), &db_path, &["--json", "undo", "CMD-3"]);
     assert_eq!(undone["reversed_command"], "CMD-3");
 
-    let item = json_output(repo.path(), &db_path, &["--json", "item", "show", "WI-1"]);
+    let item = json_output(repo.path(), &db_path, &["--json", "item", "show", &first_id]);
     assert_eq!(item["item"]["title"], "A");
 }
 
@@ -1031,15 +1075,16 @@ fn undo_refuses_when_later_changes_exist() {
     let (repo, db_path) = setup_repo();
     json_output(repo.path(), &db_path, &["--json", "init"]);
     create_item(repo.path(), &db_path, "Task");
+    let first_id = item_id(repo.path(), 1);
     json_output(
         repo.path(),
         &db_path,
-        &["--json", "item", "update", "WI-1", "--title", "First"],
+        &["--json", "item", "update", &first_id, "--title", "First"],
     );
     json_output(
         repo.path(),
         &db_path,
-        &["--json", "item", "update", "WI-1", "--title", "Second"],
+        &["--json", "item", "update", &first_id, "--title", "Second"],
     );
 
     let refusal = output(repo.path(), &db_path, &["undo", "CMD-3"]);

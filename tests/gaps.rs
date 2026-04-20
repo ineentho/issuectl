@@ -59,6 +59,20 @@ fn stdout_string(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).to_string()
 }
 
+fn default_item_prefix(path: &Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("project")
+        .chars()
+        .find(|ch| ch.is_ascii_alphabetic())
+        .map(|ch| ch.to_ascii_uppercase().to_string())
+        .unwrap_or_else(|| "P".to_string())
+}
+
+fn item_id(path: &Path, number: usize) -> String {
+    format!("{}-{number}", default_item_prefix(path))
+}
+
 #[test]
 fn no_active_project_errors_are_reported_outside_repo() {
     let dir = setup_non_repo();
@@ -74,6 +88,8 @@ fn no_active_project_errors_are_reported_outside_repo() {
 fn unknown_ids_and_missing_relations_report_validation_errors() {
     let (repo, db_path) = setup_repo();
     json_output(repo.path(), &db_path, &["--json", "init"]);
+    let first_id = item_id(repo.path(), 1);
+    let missing_id = item_id(repo.path(), 99);
     success_output(
         repo.path(),
         &db_path,
@@ -81,12 +97,12 @@ fn unknown_ids_and_missing_relations_report_validation_errors() {
     );
 
     for args in [
-        vec!["item", "show", "WI-99"],
-        vec!["history", "show", "WI-99"],
+        vec!["item", "show", &missing_id],
+        vec!["history", "show", &missing_id],
         vec!["history", "command", "CMD-99"],
         vec!["undo", "CMD-99"],
-        vec!["item", "create", "--title", "Child", "--parent", "WI-99"],
-        vec!["item", "block", "WI-1", "--by", "WI-99"],
+        vec!["item", "create", "--title", "Child", "--parent", &missing_id],
+        vec!["item", "block", &first_id, "--by", &missing_id],
     ] {
         let out = output(repo.path(), &db_path, &args);
         assert_eq!(out.status.code(), Some(1), "args: {:?}", args);
@@ -135,38 +151,40 @@ fn duplicate_block_and_unblock_are_idempotent() {
     json_output(repo.path(), &db_path, &["--json", "init"]);
     success_output(repo.path(), &db_path, &["item", "create", "--title", "A"]);
     success_output(repo.path(), &db_path, &["item", "create", "--title", "B"]);
+    let first_id = item_id(repo.path(), 1);
+    let second_id = item_id(repo.path(), 2);
 
     json_output(
         repo.path(),
         &db_path,
-        &["--json", "item", "block", "WI-2", "--by", "WI-1"],
+        &["--json", "item", "block", &second_id, "--by", &first_id],
     );
     json_output(
         repo.path(),
         &db_path,
-        &["--json", "item", "block", "WI-2", "--by", "WI-1"],
+        &["--json", "item", "block", &second_id, "--by", &first_id],
     );
     let blockers = json_output(
         repo.path(),
         &db_path,
-        &["--json", "item", "blockers", "WI-2"],
+        &["--json", "item", "blockers", &second_id],
     );
     assert_eq!(blockers["blockers"].as_array().unwrap().len(), 1);
 
     json_output(
         repo.path(),
         &db_path,
-        &["--json", "item", "unblock", "WI-2", "--by", "WI-1"],
+        &["--json", "item", "unblock", &second_id, "--by", &first_id],
     );
     json_output(
         repo.path(),
         &db_path,
-        &["--json", "item", "unblock", "WI-2", "--by", "WI-1"],
+        &["--json", "item", "unblock", &second_id, "--by", &first_id],
     );
     let blockers_after = json_output(
         repo.path(),
         &db_path,
-        &["--json", "item", "blockers", "WI-2"],
+        &["--json", "item", "blockers", &second_id],
     );
     assert!(blockers_after["blockers"].as_array().unwrap().is_empty());
 }
@@ -175,12 +193,13 @@ fn duplicate_block_and_unblock_are_idempotent() {
 fn human_outputs_include_expected_text() {
     let (repo, db_path) = setup_repo();
     success_output(repo.path(), &db_path, &["init"]);
+    let first_id = item_id(repo.path(), 1);
     let create = success_output(
         repo.path(),
         &db_path,
         &["item", "create", "--title", "Task"],
     );
-    assert!(stdout_string(&create).contains("Created item: WI-1 Task"));
+    assert!(stdout_string(&create).contains(&format!("Created item: {first_id} Task")));
     assert!(stdout_string(&create).contains("project=PRJ-1"));
 
     let explained = success_output(repo.path(), &db_path, &["project", "show", "--explain"]);
@@ -188,17 +207,17 @@ fn human_outputs_include_expected_text() {
     assert!(explained_stdout.contains("resolved_by=repo_root"));
     assert!(explained_stdout.contains("created=false"));
 
-    let show = success_output(repo.path(), &db_path, &["item", "show", "WI-1"]);
+    let show = success_output(repo.path(), &db_path, &["item", "show", &first_id]);
     let show_stdout = stdout_string(&show);
-    assert!(show_stdout.contains("WI-1: Task"));
+    assert!(show_stdout.contains(&format!("{first_id}: Task")));
     assert!(show_stdout.contains("status=todo priority=medium ready=false"));
 
-    success_output(repo.path(), &db_path, &["item", "ready", "WI-1"]);
+    success_output(repo.path(), &db_path, &["item", "ready", &first_id]);
     let next = success_output(repo.path(), &db_path, &["next"]);
-    assert!(stdout_string(&next).contains("WI-1\tmedium\tTask"));
+    assert!(stdout_string(&next).contains(&format!("{first_id}\tmedium\tTask")));
 
     let tree = success_output(repo.path(), &db_path, &["item", "tree"]);
-    assert!(stdout_string(&tree).contains("WI-1 [todo ready=true] Task"));
+    assert!(stdout_string(&tree).contains(&format!("{first_id} [todo ready=true] Task")));
 }
 
 #[test]
@@ -238,6 +257,9 @@ fn history_list_is_limited_to_fifty_entries() {
 fn next_limit_and_remaining_item_filters_work() {
     let (repo, db_path) = setup_repo();
     json_output(repo.path(), &db_path, &["--json", "init"]);
+    let first_id = item_id(repo.path(), 1);
+    let second_id = item_id(repo.path(), 2);
+    let third_id = item_id(repo.path(), 3);
     success_output(repo.path(), &db_path, &["item", "create", "--title", "One"]);
     success_output(repo.path(), &db_path, &["item", "create", "--title", "Two"]);
     success_output(
@@ -245,12 +267,12 @@ fn next_limit_and_remaining_item_filters_work() {
         &db_path,
         &["item", "create", "--title", "Three"],
     );
-    success_output(repo.path(), &db_path, &["item", "ready", "WI-1"]);
-    success_output(repo.path(), &db_path, &["item", "ready", "WI-2"]);
+    success_output(repo.path(), &db_path, &["item", "ready", &first_id]);
+    success_output(repo.path(), &db_path, &["item", "ready", &second_id]);
     success_output(
         repo.path(),
         &db_path,
-        &["item", "status", "WI-3", "cancelled"],
+        &["item", "status", &third_id, "cancelled"],
     );
 
     let ready_true = json_output(
@@ -266,7 +288,7 @@ fn next_limit_and_remaining_item_filters_work() {
         &["--json", "item", "list", "--status", "cancelled"],
     );
     assert_eq!(status_cancelled["items"].as_array().unwrap().len(), 1);
-    assert_eq!(status_cancelled["items"][0]["public_id"], "WI-3");
+    assert_eq!(status_cancelled["items"][0]["public_id"], third_id);
 
     let blocked_false = json_output(
         repo.path(),
@@ -296,13 +318,14 @@ fn unknown_project_filter_is_rejected() {
 fn invalid_enum_values_are_rejected_by_clap() {
     let (repo, db_path) = setup_repo();
     json_output(repo.path(), &db_path, &["--json", "init"]);
+    let first_id = item_id(repo.path(), 1);
     success_output(
         repo.path(),
         &db_path,
         &["item", "create", "--title", "Task"],
     );
 
-    let bad_status = output(repo.path(), &db_path, &["item", "status", "WI-1", "bogus"]);
+    let bad_status = output(repo.path(), &db_path, &["item", "status", &first_id, "bogus"]);
     assert_eq!(bad_status.status.code(), Some(2));
     assert!(stderr_string(&bad_status).contains("invalid value"));
 
@@ -333,6 +356,7 @@ fn invalid_project_prefixes_are_rejected() {
 fn next_wait_blocks_until_item_becomes_ready() {
     let (repo, db_path) = setup_repo();
     json_output(repo.path(), &db_path, &["--json", "init"]);
+    let first_id = item_id(repo.path(), 1);
     success_output(
         repo.path(),
         &db_path,
@@ -349,7 +373,7 @@ fn next_wait_blocks_until_item_becomes_ready() {
         .unwrap();
 
     thread::sleep(Duration::from_millis(350));
-    success_output(repo.path(), &db_path, &["item", "ready", "WI-1"]);
+    success_output(repo.path(), &db_path, &["item", "ready", &first_id]);
 
     let start = Instant::now();
     loop {
@@ -372,5 +396,5 @@ fn next_wait_blocks_until_item_becomes_ready() {
         .read_to_string(&mut stdout)
         .unwrap();
     let json: Value = serde_json::from_str(&stdout).unwrap();
-    assert_eq!(json["items"][0]["public_id"], "WI-1");
+    assert_eq!(json["items"][0]["public_id"], first_id);
 }
